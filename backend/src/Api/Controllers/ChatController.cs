@@ -1,11 +1,13 @@
 using Api.Contracts;
 using Api.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[EnableRateLimiting("chat")]
 public sealed class ChatController(IRetrievalChatService retrievalChatService) : ControllerBase
 {
     // DoS + wallet-drain guards: an unauthenticated endpoint must cap the input

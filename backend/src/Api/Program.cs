@@ -1,7 +1,9 @@
 using System.Text.Json;
+using System.Threading.RateLimiting;
 using Api.Options;
 using Api.Services;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.RateLimiting;
 using OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,10 +16,41 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("LocalFrontend", policy =>
     {
+        // Tight CORS: bounded origin list + only the methods/headers the frontend
+        // actually uses. No credentials, no cookies, so the risk surface is small,
+        // but defense-in-depth is cheap here.
         policy.WithOrigins(allowedOrigins)
-            .AllowAnyHeader()
-            .AllowAnyMethod();
+            .WithMethods("GET", "POST", "OPTIONS")
+            .WithHeaders("Content-Type");
     });
+});
+
+// Rate limiter. Even a POC proxying to a paid API needs a cap so an attacker
+// (or a misbehaving script) can't fire 1000 req/s and drain the OpenAI budget.
+// Chat is stricter because every turn may call tools and multiple completions.
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("chat", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+
+    options.AddPolicy("ingest", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
 // OpenAI wiring. The API key is read from OPENAI_API_KEY env var first, then from
@@ -88,7 +121,20 @@ else
     });
 }
 
+// Minimal security headers. API returns JSON so XSS risk is low, but nosniff +
+// frame deny + referrer policy cost nothing and block a few entire attack classes
+// (MIME-sniffing shenanigans, clickjacking if someone embeds the JSON endpoints).
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "no-referrer";
+    await next();
+});
+
 app.UseCors("LocalFrontend");
+app.UseRateLimiter();
 app.MapControllers();
 
 app.Run();

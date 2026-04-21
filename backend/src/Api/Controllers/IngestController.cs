@@ -2,11 +2,13 @@ using Api.Contracts;
 using Api.Models;
 using Api.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[EnableRateLimiting("ingest")]
 public sealed class IngestController(
     IConfiguration configuration,
     IChunkingService chunkingService,

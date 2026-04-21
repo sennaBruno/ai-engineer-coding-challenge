@@ -188,6 +188,9 @@ hygiene. What's in place:
 - **Path containment on ingest.** Supplied `sourcePath` must resolve (after
   symlink follow) under the repo's `knowledge-base/` directory. Blocks
   `../../etc/passwd`, absolute `/etc/...`, and symlink escapes.
+- **Rate limiting.** `/api/chat` caps at 20 req/min per client IP, `/api/ingest`
+  at 5 req/min. A 429 + no queue prevents someone firing a loop to drain the
+  OpenAI budget.
 - **DoS / wallet-drain caps on chat.** Max 40 messages per request, 8 KB per
   message. A 10 MB size cap on ingest sources prevents a huge file from
   dominating the embedding bill.
@@ -201,9 +204,27 @@ hygiene. What's in place:
   model's dimension (e.g., someone changed the embedding model without
   re-ingesting), the vector store logs an error and returns no matches
   instead of silently returning zero-score garbage.
+- **Narrow CORS.** Bounded origin list + only `GET/POST/OPTIONS` + only
+  `Content-Type` header allowed. No credentials.
+- **Security response headers.** `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` on every response.
 - **Dev vs. prod error shapes.** Development uses the developer exception
   page for inline stack traces; production hides exception text behind a
   uniform `{ "error": "…" }` JSON shape.
+
+### Known POC-scope security gaps (deliberate)
+Called out explicitly so they're understood as scope decisions, not oversights:
+
+- **No authentication / authorization.** The challenge spec lists auth as a
+  non-requirement. The rate limiter gates abuse by IP as a stopgap. A real
+  deployment would add OIDC (Auth0 / Entra / Clerk) and per-employee scoping
+  of the aisle map before exposing this externally.
+- **No per-user accounting of token spend.** Rate limiting bounds request
+  count; it does not bound tokens-per-request. Production needs OpenAI usage
+  headers surfaced + a per-principal daily budget.
+- **No request-body size cap on `/api/ingest`.** The 10 MB cap is on the
+  resolved file, not the request body. Kestrel's default 30 MB applies. An
+  explicit `[RequestSizeLimit]` belongs here before shipping.
 
 ---
 

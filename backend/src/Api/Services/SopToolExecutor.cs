@@ -33,7 +33,9 @@ public sealed class SopToolExecutor(
         string argumentsJson,
         CancellationToken cancellationToken = default)
     {
-        logger.LogInformation("Executing tool {Tool} with args {Args}", toolName, argumentsJson);
+        // Debug-level: argumentsJson can echo user-provided substrings ("lookup SSN 123-...").
+        // Production log sinks should not capture that at Information level.
+        logger.LogDebug("Executing tool {Tool} with args {Args}", toolName, argumentsJson);
 
         return toolName switch
         {
