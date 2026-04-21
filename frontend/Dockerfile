@@ -48,7 +48,11 @@ USER app
 EXPOSE 5173
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --quiet --spider http://localhost:5173/ || exit 1
+    CMD wget -qO- http://127.0.0.1:5173/ > /dev/null || exit 1
+    # Use 127.0.0.1 explicitly: alpine's resolver prefers IPv6 for
+    # `localhost` on some configs, and vite preview binds IPv4-only.
+    # -qO- fetches GET rather than --spider (HEAD), which some static
+    # servers reject.
 
 # Invoke vite directly from node_modules to avoid any run-script
 # indirection. --host 0.0.0.0 so the container's port is reachable from

@@ -321,10 +321,10 @@ Called out explicitly so they're understood as scope decisions, not oversights:
    with latency breakdowns (embed, search, LLM, tool), token counting, and a
    basic eval harness (curated question → expected-facts regex) that runs on
    CI.
-6. **Timeout budget on OpenAI calls.** Today a stuck OpenAI request sits for
-   the SDK's default (~100 s) times 4 tool iterations. Production should wrap
-   the loop in a `CancellationTokenSource` with a hard ~30 s overall budget
-   and surface a retry-friendly error.
+6. **Outer-loop timeout.** Each OpenAI call is already wrapped in a 30 s
+   `CancellationTokenSource`, so the worst-case wall time is 4 × 30 s per
+   chat turn. Production would add a single outer-loop budget (~45 s total)
+   to tighten that further and surface a retry-friendly error to the client.
 7. **Concurrent ingest guard.** The current TOCTOU (load → check → save) is
    fine for single-writer POC use but two simultaneous `POST /api/ingest`
    calls could race. Production would take a distributed lock or enqueue
