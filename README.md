@@ -33,11 +33,14 @@ Employees ask questions in a chat UI. The assistant:
 
 ### Prerequisites
 
-- .NET 10 SDK (10.0.202 tested) — https://dotnet.microsoft.com/download/dotnet/10.0
-- Node.js 20+ and one of `bun` / `pnpm` / `npm`
-- An OpenAI API key
+- **.NET 10 SDK** (10.0.202 tested) — https://dotnet.microsoft.com/download/dotnet/10.0
+- **Node.js 22 LTS** (pinned in `.nvmrc`). Node 20 LTS also works; 24 is untested.
+  If you use [`fnm`](https://github.com/Schniz/fnm) or [`nvm`](https://github.com/nvm-sh/nvm),
+  `scripts/dev.sh` switches to the correct version automatically.
+- Package manager: `bun` (preferred), falls back to `pnpm` / `npm`.
+- An OpenAI API key.
 
-### Seamless one-command launch
+### One-command launch
 
 ```bash
 # Put your key in one of these — whichever you prefer:
@@ -47,8 +50,9 @@ export OPENAI_API_KEY=sk-...
 ./scripts/dev.sh
 ```
 
-`scripts/dev.sh` handles all of the friction:
+The script:
 
+- Activates Node LTS via `fnm` / `nvm` if available (reads `.nvmrc`).
 - Locates `dotnet` on `PATH` or at `~/.dotnet/dotnet`.
 - Resolves the OpenAI key from `$OPENAI_API_KEY` or `.local/openai-key`.
 - Starts the .NET 10 API on `http://localhost:5181`.
@@ -58,6 +62,25 @@ export OPENAI_API_KEY=sk-...
 - Prints both URLs when everything is up.
 
 Other commands: `./scripts/dev.sh stop` · `./scripts/dev.sh logs`.
+
+### Running the eval harness
+
+Promptfoo runs 14 test cases against the live `/api/chat` endpoint covering
+RAG grounding, tool-call routing, unknown-product refusal, and prompt-injection
+resistance. Target ≥ 85% pass rate.
+
+```bash
+# 1. Start the backend (same ./scripts/dev.sh as above).
+# 2. In another terminal:
+./scripts/eval.sh           # install promptfoo (first run), run suite
+./scripts/eval.sh view      # open the HTML dashboard
+```
+
+`scripts/eval.sh` activates Node LTS (same logic as `dev.sh`), installs
+`promptfoo` locally inside `evals/` (this pins the `better-sqlite3` native
+binary to the active Node — avoids the `NODE_MODULE_VERSION` errors you get
+with a global `npx` cache), checks the backend is healthy, then runs the suite.
+See `evals/README.md` for test coverage details.
 
 ### Manual launch (if you prefer)
 

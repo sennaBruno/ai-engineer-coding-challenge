@@ -61,3 +61,7 @@ x64/
 x86/
 yarn-debug.log*
 yarn-error.log*
+
+# Promptfoo local cache + output
+.promptfoo/
+evals/.promptfoo/

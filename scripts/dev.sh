@@ -32,6 +32,25 @@ resolve_dotnet() {
   echo ""
 }
 
+# Use Node LTS (see .nvmrc) if fnm or nvm is available. The promptfoo eval
+# harness needs a consistent Node major because its better-sqlite3 native
+# binary is compiled per-Node-version — running on a different major produces
+# NODE_MODULE_VERSION errors. Vite/bun don't care, but we keep one Node for
+# everything so the developer never has to think about it.
+activate_node_lts() {
+  local target_major="22"
+  [ -f "$REPO_ROOT/.nvmrc" ] && target_major="$(tr -d ' \n\r' < "$REPO_ROOT/.nvmrc")"
+
+  if command -v fnm >/dev/null 2>&1; then
+    eval "$(fnm env 2>/dev/null || true)"
+    fnm use "$target_major" >/dev/null 2>&1 || fnm install "$target_major" >/dev/null 2>&1 && fnm use "$target_major" >/dev/null 2>&1 || true
+  elif [ -s "$HOME/.nvm/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$HOME/.nvm/nvm.sh"
+    nvm use "$target_major" >/dev/null 2>&1 || nvm install "$target_major" >/dev/null 2>&1 || true
+  fi
+}
+
 resolve_key() {
   if [ -n "${OPENAI_API_KEY:-}" ]; then
     return
@@ -80,6 +99,10 @@ if [ -z "$DOTNET" ]; then
   echo "Install .NET 10 SDK: https://dotnet.microsoft.com/download/dotnet/10.0" >&2
   exit 1
 fi
+
+# Activate Node LTS early so the Vite/bun frontend and the optional promptfoo
+# eval harness agree on the Node major. Noop if fnm/nvm aren't installed.
+activate_node_lts
 
 resolve_key
 if [ -z "${OPENAI_API_KEY:-}" ]; then

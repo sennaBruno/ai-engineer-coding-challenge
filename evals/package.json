@@ -1,0 +1,16 @@
+{
+  "name": "fmg-challenge-evals",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Promptfoo harness for the Grocery SOP assistant.",
+  "scripts": {
+    "eval": "promptfoo eval",
+    "view": "promptfoo view"
+  },
+  "devDependencies": {
+    "promptfoo": "^0.120.0"
+  },
+  "engines": {
+    "node": ">=22 <25"
+  }
+}
