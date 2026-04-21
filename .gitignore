@@ -70,3 +70,6 @@ Thumbs.db
 
 # Generated vector store artifact
 backend/src/Api/Data/vector-store.json
+
+# Local dev secrets — the key lives here only for convenience; env var is preferred.
+backend/src/Api/appsettings.Development.json

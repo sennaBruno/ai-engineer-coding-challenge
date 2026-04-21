@@ -28,11 +28,12 @@ export interface ChatRequest {
   useTools: boolean
 }
 
+export type ChatResponseStatus = 'ok' | 'error' | 'tool-loop-exhausted'
+
 export interface ChatResponse {
   conversationId: string
   assistantMessage: string
-  status: string
-  isPlaceholder: boolean
+  status: ChatResponseStatus
   toolCalls: string[]
   citations: Citation[]
 }
@@ -49,7 +50,6 @@ export interface IngestResponse {
   chunksCreated: number
   recordsPersisted: number
   vectorStorePath: string
-  isPlaceholder: boolean
 }
 
 export interface HealthResponse {

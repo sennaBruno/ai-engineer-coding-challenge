@@ -6,9 +6,11 @@ public sealed class ChatResponse
 
     public string AssistantMessage { get; init; } = string.Empty;
 
-    public string Status { get; init; } = "placeholder";
-
-    public bool IsPlaceholder { get; init; }
+    /// <summary>
+    /// One of: "ok", "error", "tool-loop-exhausted". Mirror this in the TypeScript
+    /// client as a discriminated union when adding new values.
+    /// </summary>
+    public string Status { get; init; } = "ok";
 
     public List<string> ToolCalls { get; init; } = [];
 

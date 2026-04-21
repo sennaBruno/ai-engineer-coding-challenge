@@ -15,6 +15,11 @@ public sealed class IngestController(
     IWebHostEnvironment environment,
     ILogger<IngestController> logger) : ControllerBase
 {
+    // Hard cap so a huge file (legitimate mistake or malicious pointer) can't blow up
+    // memory or trigger an unbounded embedding bill. 10 MB fits anything reasonable
+    // for an SOP document.
+    private const long MaxSourceFileBytes = 10 * 1024 * 1024;
+
     [HttpPost]
     public async Task<ActionResult<IngestResponse>> Post(
         [FromBody] IngestRequest? request,
@@ -28,13 +33,24 @@ public sealed class IngestController(
             ? configuredSourcePath
             : request!.SourcePath;
 
-        var resolvedSource = ResolveSopPath(sourcePath, environment);
+        var knowledgeBaseRoot = FindKnowledgeBaseRoot(environment);
+        var resolvedSource = ResolveSopPath(sourcePath, environment, knowledgeBaseRoot);
         if (resolvedSource is null)
         {
             return BadRequest(new
             {
-                error = $"SOP source document not found. Tried resolving '{sourcePath}' against the backend content root and common parent directories. " +
-                        "Pass an absolute path via the request body if your source lives elsewhere."
+                error = "SOP source document not found. The source path must resolve to " +
+                        $"a file under the repository's knowledge-base/ directory. Attempted: '{sourcePath}'."
+            });
+        }
+
+        var fileInfo = new FileInfo(resolvedSource);
+        if (fileInfo.Length > MaxSourceFileBytes)
+        {
+            return BadRequest(new
+            {
+                error = $"Source file is {fileInfo.Length / 1024} KB which exceeds the " +
+                        $"{MaxSourceFileBytes / 1024 / 1024} MB ingest cap."
             });
         }
 
@@ -49,8 +65,7 @@ public sealed class IngestController(
                 SourcePath = sourcePath,
                 ChunksCreated = existing.Count,
                 RecordsPersisted = existing.Count,
-                VectorStorePath = vectorStorePath,
-                IsPlaceholder = false
+                VectorStorePath = vectorStorePath
             });
         }
 
@@ -69,8 +84,7 @@ public sealed class IngestController(
                 SourcePath = sourcePath,
                 ChunksCreated = 0,
                 RecordsPersisted = 0,
-                VectorStorePath = vectorStorePath,
-                IsPlaceholder = false
+                VectorStorePath = vectorStorePath
             });
         }
 
@@ -102,39 +116,79 @@ public sealed class IngestController(
             SourcePath = sourcePath,
             ChunksCreated = chunks.Count,
             RecordsPersisted = records.Count,
-            VectorStorePath = vectorStorePath,
-            IsPlaceholder = false
+            VectorStorePath = vectorStorePath
         });
     }
 
     /// <summary>
-    /// Resolves the SOP path against multiple plausible roots so the challenge works whether
-    /// the API is launched from the project directory, a bin/ output folder, or via an IDE.
+    /// Walks up from the content root until we find a `knowledge-base/` directory.
+    /// Returns its absolute path (or null if we can't find one within 6 levels).
+    /// This directory is the only place an ingest source is allowed to live — see
+    /// <see cref="ResolveSopPath"/> for the containment check.
     /// </summary>
-    private static string? ResolveSopPath(string path, IWebHostEnvironment environment)
+    private static string? FindKnowledgeBaseRoot(IWebHostEnvironment environment)
     {
-        var normalized = path.Replace('\\', Path.DirectorySeparatorChar);
-
-        if (Path.IsPathRooted(normalized))
-        {
-            return System.IO.File.Exists(normalized) ? normalized : null;
-        }
-
-        var candidates = new List<string>
-        {
-            Path.GetFullPath(Path.Combine(environment.ContentRootPath, normalized)),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, normalized)),
-            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), normalized))
-        };
-
-        // Walk up from the content root until we find a sibling knowledge-base/Grocery_Store_SOP.md.
         var current = new DirectoryInfo(environment.ContentRootPath);
-        var fileName = Path.GetFileName(normalized);
         for (var i = 0; i < 6 && current is not null; i++, current = current.Parent)
         {
-            candidates.Add(Path.Combine(current.FullName, "knowledge-base", fileName));
+            var candidate = Path.Combine(current.FullName, "knowledge-base");
+            if (Directory.Exists(candidate))
+            {
+                return Path.GetFullPath(candidate);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Resolves the supplied SOP path and verifies the result lives inside the
+    /// repository's knowledge-base/ directory. This blocks path-traversal
+    /// (../../etc/passwd, absolute /root/secret, symlinks that escape the root)
+    /// which is important because the request body comes from an unauthenticated
+    /// client in this POC.
+    /// </summary>
+    private static string? ResolveSopPath(
+        string path,
+        IWebHostEnvironment environment,
+        string? knowledgeBaseRoot)
+    {
+        if (knowledgeBaseRoot is null)
+        {
+            return null;
         }
 
-        return candidates.FirstOrDefault(System.IO.File.Exists);
+        var normalized = path.Replace('\\', Path.DirectorySeparatorChar);
+
+        // Build candidate absolute paths from the relative input.
+        var candidates = new List<string>();
+        if (Path.IsPathRooted(normalized))
+        {
+            candidates.Add(normalized);
+        }
+        else
+        {
+            candidates.Add(Path.GetFullPath(Path.Combine(environment.ContentRootPath, normalized)));
+            candidates.Add(Path.GetFullPath(Path.Combine(knowledgeBaseRoot, Path.GetFileName(normalized))));
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (!System.IO.File.Exists(candidate))
+            {
+                continue;
+            }
+
+            // Resolve any symlinks before the containment check so a symlink inside
+            // knowledge-base pointing to /etc/passwd doesn't slip through.
+            var resolved = Path.GetFullPath(new FileInfo(candidate).ResolveLinkTarget(true)?.FullName ?? candidate);
+            var rootWithSep = knowledgeBaseRoot.EndsWith(Path.DirectorySeparatorChar)
+                ? knowledgeBaseRoot
+                : knowledgeBaseRoot + Path.DirectorySeparatorChar;
+            if (resolved.StartsWith(rootWithSep, StringComparison.Ordinal))
+            {
+                return resolved;
+            }
+        }
+        return null;
     }
 }

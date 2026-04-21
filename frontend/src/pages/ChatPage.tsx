@@ -173,8 +173,9 @@ export function ChatPage() {
               <button
                 key={question}
                 type="button"
+                disabled={isSending}
                 onClick={() => void handleSend(question)}
-                className="text-xs rounded-full border border-border bg-surface/70 px-3 py-1.5 text-muted hover:text-foreground hover:bg-accent/60 transition"
+                className="text-xs rounded-full border border-border bg-surface/70 px-3 py-1.5 text-muted hover:text-foreground hover:bg-accent/60 transition disabled:opacity-50 disabled:pointer-events-none"
               >
                 {question}
               </button>

@@ -82,22 +82,42 @@ public sealed class SopToolExecutor(
                 []);
         }
 
+        // Wrap each chunk body in <sop_chunk> delimiters. The system prompt instructs
+        // the model to treat content inside these tags as untrusted data, not instructions
+        // — this is our prompt-injection guard for retrieved SOP text.
         var payload = new
         {
             query = args.Query,
-            results = matches.Select(match => new
+            results = matches.Select(match =>
             {
-                chunk_id = match.Record.Id,
-                section = match.Record.Metadata.GetValueOrDefault("section", match.Record.Source),
-                source = match.Record.Source,
-                start_line = match.Record.Metadata.GetValueOrDefault("startLine"),
-                end_line = match.Record.Metadata.GetValueOrDefault("endLine"),
-                score = Math.Round(match.Score, 4),
-                content = match.Record.ChunkText
+                var section = match.Record.Metadata.GetValueOrDefault("section", match.Record.Source);
+                int.TryParse(match.Record.Metadata.GetValueOrDefault("startLine"), out var startLine);
+                int.TryParse(match.Record.Metadata.GetValueOrDefault("endLine"), out var endLine);
+                return new
+                {
+                    chunk_id = match.Record.Id,
+                    section,
+                    source = match.Record.Source,
+                    start_line = startLine > 0 ? startLine : (int?)null,
+                    end_line = endLine > 0 ? endLine : (int?)null,
+                    score = Math.Round(match.Score, 4),
+                    content = FormatAsSopChunk(section, startLine, endLine, match.Record.ChunkText)
+                };
             })
         };
 
         return new ToolExecutionResult(JsonSerializer.Serialize(payload, OutputJsonOptions), matches);
+    }
+
+    private static string FormatAsSopChunk(string section, int startLine, int endLine, string body)
+    {
+        var lineAttr = startLine > 0
+            ? (endLine > startLine ? $"lines=\"{startLine}-{endLine}\" " : $"line=\"{startLine}\" ")
+            : string.Empty;
+        // Keep the section attribute quoted and HTML-escape quotes so a crafted section
+        // name can't break out of the attribute.
+        var safeSection = section.Replace("\"", "&quot;");
+        return $"<sop_chunk section=\"{safeSection}\" {lineAttr}>\n{body}\n</sop_chunk>";
     }
 
     private static ToolExecutionResult ExecuteLookup(string argumentsJson)
@@ -123,12 +143,27 @@ public sealed class SopToolExecutor(
 
         var normalized = args.ItemName.Trim().ToLowerInvariant();
 
-        // Direct hit first, then fall back to substring match.
-        if (!ProductCatalog.TryGetValue(normalized, out var location))
+        // Direct hit first, then deterministic substring match ranked by: exact prefix
+        // match → shortest catalog key that contains the query → longest catalog key
+        // contained by the query. Non-deterministic dictionary-order FirstOrDefault
+        // previously made "ice" match either "ice cream" or "rice" depending on
+        // insertion order.
+        ProductLocation? location = null;
+        if (!ProductCatalog.TryGetValue(normalized, out location))
         {
-            location = ProductCatalog
-                .FirstOrDefault(entry => normalized.Contains(entry.Key) || entry.Key.Contains(normalized))
-                .Value;
+            var ranked = ProductCatalog
+                .Where(entry => entry.Key.Contains(normalized) || normalized.Contains(entry.Key))
+                .Select(entry => new
+                {
+                    entry.Key,
+                    entry.Value,
+                    PrefixMatch = entry.Key.StartsWith(normalized) || normalized.StartsWith(entry.Key) ? 0 : 1,
+                    Length = entry.Key.Length
+                })
+                .OrderBy(x => x.PrefixMatch)
+                .ThenBy(x => x.Length)
+                .FirstOrDefault();
+            location = ranked?.Value;
         }
 
         if (location is null)

@@ -1,8 +1,8 @@
+using System.Text.Json;
 using Api.Options;
 using Api.Services;
+using Microsoft.AspNetCore.Diagnostics;
 using OpenAI;
-using OpenAI.Chat;
-using OpenAI.Embeddings;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,8 +21,8 @@ builder.Services.AddCors(options =>
 });
 
 // OpenAI wiring. The API key is read from OPENAI_API_KEY env var first, then from
-// appsettings (intended for Development only). An empty/placeholder key short-circuits
-// into helpful startup guidance instead of mysteriously failing on the first request.
+// appsettings (intended for Development only). An empty/placeholder key fails fast
+// at startup with a helpful message, not a mysterious 500 on the first request.
 var openAiOptions = new OpenAIOptions();
 builder.Configuration.GetSection(OpenAIOptions.SectionName).Bind(openAiOptions);
 
@@ -55,6 +55,29 @@ builder.Services.AddSingleton<ISopToolExecutor, SopToolExecutor>();
 builder.Services.AddSingleton<IRetrievalChatService, OpenAIRetrievalChatService>();
 
 var app = builder.Build();
+
+// Global exception handler. Every unhandled exception becomes a uniform
+// { "error": "..." } JSON body so the TypeScript client's error parser sees
+// a consistent shape. Full details land in the logger for operators.
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var ex = feature?.Error;
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("UnhandledException");
+        logger.LogError(ex, "Unhandled exception on {Path}", context.Request.Path);
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json";
+        var body = JsonSerializer.Serialize(new
+        {
+            error = "An unexpected error occurred. Check the server logs for details."
+        });
+        await context.Response.WriteAsync(body);
+    });
+});
 
 app.UseCors("LocalFrontend");
 app.MapControllers();

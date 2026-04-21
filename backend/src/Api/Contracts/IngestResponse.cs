@@ -13,6 +13,4 @@ public sealed class IngestResponse
     public int RecordsPersisted { get; init; }
 
     public string VectorStorePath { get; init; } = string.Empty;
-
-    public bool IsPlaceholder { get; init; }
 }
