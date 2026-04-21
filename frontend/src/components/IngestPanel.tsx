@@ -1,29 +1,68 @@
+import { Upload } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
+import { Input } from '@/components/ui/Input'
+
 interface IngestPanelProps {
   sourcePath: string
   onSourcePathChange: (value: string) => void
   onIngest: () => void
   isBusy: boolean
+  chunksIngested?: number
 }
 
-export function IngestPanel({ sourcePath, onSourcePathChange, onIngest, isBusy }: IngestPanelProps) {
+export function IngestPanel({
+  sourcePath,
+  onSourcePathChange,
+  onIngest,
+  isBusy,
+  chunksIngested,
+}: IngestPanelProps) {
   return (
-    <section className="sidebar-card" aria-labelledby="ingest-heading">
-      <h2 id="ingest-heading">Ingest</h2>
-      <p>Use the backend-ready default path for the provided SOP and trigger the placeholder ingest endpoint.</p>
-      <label htmlFor="source-path">Source document path</label>
-      <input
-        id="source-path"
-        className="source-input"
-        value={sourcePath}
-        onChange={(event) => onSourcePathChange(event.target.value)}
-        disabled={isBusy}
-      />
-      <div className="ingest-actions">
-        <span className="hint">Default local path: ../../../../knowledge-base/Grocery_Store_SOP.md</span>
-        <button className="secondary-button" type="button" onClick={onIngest} disabled={isBusy || sourcePath.trim().length === 0}>
-          {isBusy ? 'Ingesting...' : 'Run Ingest'}
-        </button>
-      </div>
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Upload className="h-4 w-4 text-primary" />
+          Ingest SOP
+        </CardTitle>
+        <CardDescription>
+          Reads the source file, chunks by SOP section, embeds, and persists to
+          the local JSON vector store.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="space-y-1.5">
+          <label htmlFor="source-path" className="text-xs font-medium text-muted">
+            Source document path
+          </label>
+          <Input
+            id="source-path"
+            value={sourcePath}
+            onChange={(event) => onSourcePathChange(event.target.value)}
+            disabled={isBusy}
+            spellCheck={false}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          {typeof chunksIngested === 'number' && chunksIngested > 0 ? (
+            <span className="text-xs text-muted">
+              <span className="font-semibold text-foreground">{chunksIngested}</span> chunks ingested
+            </span>
+          ) : (
+            <span className="text-xs text-muted">Not ingested yet</span>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={onIngest}
+            disabled={isBusy || sourcePath.trim().length === 0}
+          >
+            {isBusy ? 'Ingesting…' : 'Run ingest'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

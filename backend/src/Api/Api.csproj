@@ -8,4 +8,8 @@
     <AssemblyName>GroceryStore.Chatbot.Api</AssemblyName>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="OpenAI" Version="2.5.0" />
+  </ItemGroup>
+
 </Project>

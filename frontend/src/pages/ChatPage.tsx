@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
-import { apiClient } from '../services/apiClient'
-import type { ChatMessage, Citation, StatusMessage } from '../types/chat'
-import { ChatComposer } from '../components/ChatComposer'
-import { ChatTranscript } from '../components/ChatTranscript'
-import { CitationsPanel } from '../components/CitationsPanel'
-import { IngestPanel } from '../components/IngestPanel'
-import { StatusBanner } from '../components/StatusBanner'
+import { ShoppingBasket } from 'lucide-react'
+import { apiClient } from '@/services/apiClient'
+import type { ChatMessage, Citation, StatusMessage } from '@/types/chat'
+import { ChatComposer } from '@/components/ChatComposer'
+import { ChatTranscript } from '@/components/ChatTranscript'
+import { CitationsPanel } from '@/components/CitationsPanel'
+import { IngestPanel } from '@/components/IngestPanel'
+import { StatusBanner } from '@/components/StatusBanner'
+import { ToolCallsPanel } from '@/components/ToolCallsPanel'
 
-const defaultSourcePath = '../../../../knowledge-base/Grocery_Store_SOP.md'
+const DEFAULT_SOURCE_PATH = '../../../knowledge-base/Grocery_Store_SOP.md'
 
 function createMessage(role: ChatMessage['role'], content: string): ChatMessage {
   return {
@@ -18,51 +20,57 @@ function createMessage(role: ChatMessage['role'], content: string): ChatMessage 
   }
 }
 
+const STARTER_QUESTIONS = [
+  'What are the opening checklist steps for the manager on duty?',
+  'How much can a cashier refund without a manager?',
+  'Where is the milk?',
+  'What are the food safety temperature rules for the deli?',
+]
+
 export function ChatPage() {
   const [conversationId] = useState(() => window.crypto.randomUUID())
   const [draft, setDraft] = useState('')
-  const [sourcePath, setSourcePath] = useState(defaultSourcePath)
+  const [sourcePath, setSourcePath] = useState(DEFAULT_SOURCE_PATH)
   const [isSending, setIsSending] = useState(false)
   const [isIngesting, setIsIngesting] = useState(false)
   const [citations, setCitations] = useState<Citation[]>([])
+  const [toolCalls, setToolCalls] = useState<string[]>([])
+  const [chunksIngested, setChunksIngested] = useState<number>(0)
   const [status, setStatus] = useState<StatusMessage>({
     tone: 'info',
-    message: 'Checking backend health...',
+    message: 'Checking backend health…',
   })
   const [messages, setMessages] = useState<ChatMessage[]>([
     createMessage(
       'assistant',
-      'This is a baseline scaffold. Chat, retrieval, citations, and vector-store persistence are intentionally left unimplemented for the challenge.',
+      'Hi! I\'m your SOP assistant. Ingest the SOP document using the panel on the right, then ask me anything about store procedures, safety rules, or where to find products.',
     ),
   ])
 
   useEffect(() => {
     let isCancelled = false
-
     async function loadHealth() {
       try {
         const health = await apiClient.getHealth()
-
         if (!isCancelled) {
           setStatus({
             tone: 'success',
-            message: `${health.service} is running. ${health.notes[0] ?? ''}`.trim(),
+            message: `Backend online — ${health.service}`,
           })
         }
       } catch (error) {
         if (!isCancelled) {
           setStatus({
             tone: 'warning',
-            message: error instanceof Error
-              ? `Backend health check failed: ${error.message}`
-              : 'Backend health check failed.',
+            message:
+              error instanceof Error
+                ? `Backend health check failed: ${error.message}`
+                : 'Backend health check failed.',
           })
         }
       }
     }
-
     void loadHealth()
-
     return () => {
       isCancelled = true
     }
@@ -70,17 +78,14 @@ export function ChatPage() {
 
   async function handleIngest() {
     setIsIngesting(true)
-    setStatus({ tone: 'info', message: 'Calling the ingest endpoint...' })
+    setStatus({ tone: 'info', message: 'Ingesting SOP — chunking, embedding, persisting…' })
 
     try {
-      const response = await apiClient.ingest({
-        sourcePath,
-        forceReingest: false,
-      })
-
+      const response = await apiClient.ingest({ sourcePath, forceReingest: false })
+      setChunksIngested(response.recordsPersisted)
       setStatus({
-        tone: response.isPlaceholder ? 'warning' : 'success',
-        message: `${response.message} Vector store: ${response.vectorStorePath}`,
+        tone: response.accepted ? 'success' : 'warning',
+        message: response.message,
       })
     } catch (error) {
       setStatus({
@@ -92,19 +97,17 @@ export function ChatPage() {
     }
   }
 
-  async function handleSend() {
-    const trimmedDraft = draft.trim()
-    if (!trimmedDraft) {
-      return
-    }
+  async function handleSend(override?: string) {
+    const candidate = (override ?? draft).trim()
+    if (!candidate) return
 
-    const userMessage = createMessage('user', trimmedDraft)
+    const userMessage = createMessage('user', candidate)
     const nextMessages = [...messages, userMessage]
 
     setMessages(nextMessages)
     setDraft('')
     setIsSending(true)
-    setStatus({ tone: 'info', message: 'Sending chat request...' })
+    setStatus({ tone: 'info', message: 'Thinking…' })
 
     try {
       const response = await apiClient.chat({
@@ -117,19 +120,20 @@ export function ChatPage() {
         })),
       })
 
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        createMessage('assistant', response.assistantMessage),
-      ])
+      setMessages((current) => [...current, createMessage('assistant', response.assistantMessage)])
       setCitations(response.citations)
+      setToolCalls(response.toolCalls)
       setStatus({
-        tone: response.isPlaceholder ? 'warning' : 'success',
-        message: `Chat response received with status '${response.status}'.`,
+        tone: response.status === 'ok' ? 'success' : 'warning',
+        message: `Response received · status: ${response.status}`,
       })
     } catch (error) {
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        createMessage('assistant', 'The chat request failed. Start the backend and try again.'),
+      setMessages((current) => [
+        ...current,
+        createMessage(
+          'assistant',
+          'The chat request failed. Make sure the backend is running and the OpenAI key is configured.',
+        ),
       ])
       setStatus({
         tone: 'error',
@@ -140,28 +144,61 @@ export function ChatPage() {
     }
   }
 
+  const showStarters = messages.length <= 1 && !isSending
+
   return (
-    <main className="app-shell">
-      <section className="chat-layout">
-        <header className="app-header">
-          <h1>Grocery Store SOP Assistant</h1>
-          <p>
-            A lightweight React shell for a multi-turn employee chatbot backed by a .NET 10 Web API.
-            The ingest form is prefilled with the backend-ready local path for the provided SOP file.
-          </p>
+    <main className="min-h-screen grid gap-4 p-4 lg:p-6 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] max-w-[1400px] mx-auto">
+      <section className="flex flex-col rounded-2xl border border-border bg-card/80 backdrop-blur-sm shadow-[0_30px_80px_-30px_oklch(30%_0.02_260_/_0.18)] overflow-hidden min-h-[85vh]">
+        <header className="px-6 pt-6 pb-4 border-b border-border bg-gradient-to-br from-accent/40 to-surface">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+              <ShoppingBasket className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">Grocery SOP Assistant</h1>
+              <p className="text-xs text-muted">
+                Grounded chatbot for employees · RAG + tool-calling over the store SOP
+              </p>
+            </div>
+          </div>
         </header>
+
         <StatusBanner status={status} />
-        <ChatTranscript messages={messages} />
-        <ChatComposer value={draft} onChange={setDraft} onSubmit={handleSend} isBusy={isSending} />
+
+        <ChatTranscript messages={messages} isStreaming={isSending} />
+
+        {showStarters && (
+          <div className="px-5 pb-3 flex flex-wrap gap-2">
+            {STARTER_QUESTIONS.map((question) => (
+              <button
+                key={question}
+                type="button"
+                onClick={() => void handleSend(question)}
+                className="text-xs rounded-full border border-border bg-surface/70 px-3 py-1.5 text-muted hover:text-foreground hover:bg-accent/60 transition"
+              >
+                {question}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <ChatComposer
+          value={draft}
+          onChange={setDraft}
+          onSubmit={() => void handleSend()}
+          isBusy={isSending}
+        />
       </section>
 
-      <aside className="sidebar">
+      <aside className="flex flex-col gap-4">
         <IngestPanel
           sourcePath={sourcePath}
           onSourcePathChange={setSourcePath}
           onIngest={handleIngest}
           isBusy={isIngesting}
+          chunksIngested={chunksIngested}
         />
+        <ToolCallsPanel toolCalls={toolCalls} />
         <CitationsPanel citations={citations} />
       </aside>
     </main>

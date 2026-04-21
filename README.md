@@ -1,136 +1,251 @@
-# Grocery Store SOP Assistant Coding Challenge
+# Grocery Store SOP Assistant
 
-## Scenario
+An internal chatbot POC that helps grocery store employees get grounded answers
+about store Standard Operating Procedures. Built as a vertical slice: document
+ingestion → chunking + embedding → local JSON vector store → RAG-based chat
+with tool-calling and multi-turn context.
 
-You are building an internal chatbot for a grocery store chain. Store employees should be able to ask questions about operating procedures and receive grounded answers based on the SOP document in `knowledge-base/Grocery_Store_SOP.md`. The team just wants a POC to demonstrate the concept, so you should focus on building a clear vertical slice that connects document ingestion, retrieval, and a simple chat interface.
+**Stack:** .NET 10 Web API + OpenAI SDK for C# · React 19 + Vite + Tailwind v4
+· `text-embedding-3-small` · `gpt-4o-mini`
 
-This challenge is intentionally scoped for **2-3 hours** of focused work with AI assistance. The goal is not to build a production-ready system. The goal is to demonstrate technical judgment, pragmatic scoping, and the ability to connect backend, frontend, and AI-oriented application patterns.
+> Original challenge brief archived at `CHALLENGE.md`.
 
-## Goals
+---
 
-Build a working vertical slice that demonstrates:
+## What it does
 
-- A C# / .NET 10 Web API backend.
-- A React frontend for a simple multi-turn chat experience.
-- Document ingestion from the provided SOP file.
-- Chunking and embedding of document text.
-- A local vector-store concept that is held in memory during runtime and persisted as a JSON array on disk.
-- Retrieval-augmented generation (RAG) using the SOP content.
-- Tool-calling or agentic behavior where the assistant can decide to use supporting actions when appropriate.
-- Multi-turn chat that preserves enough conversation context to answer follow-up questions.
+Employees ask questions in a chat UI. The assistant:
 
-## Provided Input
+1. Decides whether to call a tool based on the question.
+2. For procedural / policy / safety questions, calls `search_sop` — a semantic
+   search over chunks of the ingested SOP.
+3. For "where is X?" product-location questions, calls `lookup_product_location`
+   — a deterministic aisle-map lookup (faster, more reliable than vector search
+   for this class of question).
+4. Returns a concise answer grounded in retrieved SOP passages with citations,
+   plus a trace of which tools fired.
+5. Preserves conversation context so follow-up questions like "and what time
+   does that happen?" resolve against prior turns.
 
-- Ingestion source: `knowledge-base/Grocery_Store_SOP.md`
+---
 
-You should treat the SOP as the primary knowledge source for the chatbot.
+## Running it locally
 
-## Required Features
+### Prerequisites
 
-### Backend
+- .NET 10 SDK (10.0.202 tested) — https://dotnet.microsoft.com/download/dotnet/10.0
+- Node.js 20+ and npm
+- An OpenAI API key
 
-- Expose HTTP endpoints for ingestion and chat.
-- Read the SOP document from the repository.
-- Ingest the document so that it can be used for retrieval. 
-- Persist vector records locally as a JSON array file.
-- Build a chat endpoint that uses retrieved context to answer questions.
-- Support multi-turn conversation inputs.
-- Include a clear place for tool-calling or agent orchestration logic.
+### 1. Backend
 
-### Frontend
+```bash
+cd backend/src/Api
 
-- Provide a simple chat UI.
-- Allow the user to trigger ingestion.
-- Show a transcript of the conversation.
-- Support multiple user/assistant turns.
+# Set the API key — env var is preferred; appsettings is fine for local dev.
+export OPENAI_API_KEY="sk-..."
 
-### AI-Oriented Expectations
+dotnet run --urls http://localhost:5181
+```
 
-- **RAG:** Ground responses in retrieved SOP content and return citations for the chunks you used.
-- **Tool-calling / agentic behavior:** Define one or two tools (e.g., a tool that searches SOP chunks by query, a tool that looks up store hours) and wire them into your chat flow using OpenAI function-calling (or equivalent). The assistant should be able to decide *when* to invoke a tool versus answer directly, and incorporate the tool's result into its response. You do not need to build a multi-step agent loop or a full orchestration framework — a single-turn tool-use decision is sufficient. We're looking for evidence that you understand how to **design tool schemas, let the model select tools, execute them, and feed results back** into the conversation.
-- **Multi-turn chat:** Keep enough state to handle follow-up questions without rebuilding the entire system.
+The API listens on `http://localhost:5181`. Three endpoints:
 
-## Non-Requirements
+- `GET  /api/health` — liveness
+- `POST /api/ingest` — reads the SOP, chunks, embeds, persists to
+  `backend/src/Api/Data/vector-store.json`
+- `POST /api/chat` — multi-turn chat with tool calling
 
-- No authentication or authorization.
-- No external vector database.
-- No production deployment.
-- No need to support multiple documents unless you want to.
+### 2. Frontend
 
-## Freedom for Design and Creativity
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-- You have freedom to design the API, data structures, and frontend as you see fit. Although boilerplate code is provided, you are not required to use it. You can start from scratch if you prefer and use any React component library or styling approach you like. If you have another C# library such as Microsoft Agent Framework or other Agentic SDK you would like to use you can absolutely do that as well. The most important thing is to demonstrate a clear vertical slice that connects the core concepts of document ingestion, retrieval, RAG, and a chat interface and that it works.
-- Some specifications were intentionally omitted to give you freedom to make design decisions so that we can gauge some of your engineering judgment and see how you connect the dots.
+Opens on `http://localhost:5173` (or 5174 if 5173 is busy). If Vite picks a
+different port, add it to `Cors:AllowedOrigins` in
+`backend/src/Api/appsettings.json`.
 
-## Constraints
+### 3. Use it
 
-- Backend stack must be **C# / .NET 10 Web API**.
-- Frontend stack must be **React**.
-- The vector store must be **local/in-memory and persisted as JSON**, not an external database.
-- The code should be locally runnable without complex setup. The only external dependencies should be for AI services and standard libraries.
-- Keep the codebase easy to understand and easy to extend.
+1. Open the frontend in a browser.
+2. Click **Run ingest** in the right-hand panel. This chunks the SOP into ~25
+   sections and embeds them (~3 seconds).
+3. Ask the assistant questions. Try the starter suggestions below the
+   transcript:
+   - "What are the opening checklist steps for the manager on duty?"
+   - "How much can a cashier refund without a manager?"
+   - "Where is the milk?"
+   - "What are the food safety temperature rules for the deli?"
 
-## Suggested Approach
+---
 
-1. Get the backend and frontend running locally.
-2. Add ingestion for the SOP file.
-3. Store chunks and embeddings in a local JSON artifact.
-4. Implement retrieval.
-5. Add a chat flow that uses retrieved context.
-6. Add one lightweight agentic or tool-calling behavior.
-7. Polish developer experience and document tradeoffs.
+## Architecture
 
-## Evaluation Criteria
+```
+┌─────────────────────────┐     POST /api/chat       ┌─────────────────────────────────────┐
+│  React UI               │ ────────────────────────▶│ ChatController                      │
+│  - Transcript           │                          │   ↓                                 │
+│  - Composer             │◀────── JSON response ────│ OpenAIRetrievalChatService          │
+│  - Ingest panel         │                          │   ├─ build messages + tools         │
+│  - Tool-calls, Citations│                          │   ├─ loop: complete → tool-calls    │
+│  - Starter suggestions  │                          │   │         → execute → repeat      │
+└─────────────────────────┘                          │   └─ final answer + citations       │
+                                                     └─┬───────────────────────────────────┘
+                                                       │
+                                                       ▼
+                                      ┌───────────────────────────────────────┐
+                                      │ SopToolExecutor                       │
+                                      │  ┌─ search_sop                        │
+                                      │  │   └─ EmbeddingService → OpenAI     │
+                                      │  │       ↓                            │
+                                      │  │   FileVectorStore.SearchAsync      │
+                                      │  │       (cosine similarity on JSON)  │
+                                      │  └─ lookup_product_location           │
+                                      │      └─ static aisle map (dict)       │
+                                      └───────────────────────────────────────┘
 
-We will evaluate submissions on:
+Ingest path: IngestController → MarkdownChunkingService →
+             OpenAIEmbeddingService (batched) →
+             FileVectorStoreService.SaveAsync (atomic write, JSON array on disk)
+```
 
-- A working POC that demonstrates the required features.
-- Code quality and organization.
-- Clarity of API and frontend structure.
-- Practical handling of document ingestion, retrieval, and RAG.
-- Evidence of sound engineering judgment and tradeoff awareness.
-- Reasonable use of AI assistance without losing code clarity.
-- Basic usability of the chat experience.
+### Key files
 
-## Submission Notes
+| File | Purpose |
+|---|---|
+| `backend/src/Api/Services/MarkdownChunkingService.cs` | Splits the SOP on H2 headers, sub-splits oversized sections on paragraph boundaries, keeps section + line-range metadata for citations |
+| `backend/src/Api/Services/OpenAIEmbeddingService.cs` | Thin wrapper over OpenAI's embedding client; batches ingest calls |
+| `backend/src/Api/Services/FileVectorStoreService.cs` | Lazy-load, atomic save (temp file + rename), in-memory cache, cosine similarity search |
+| `backend/src/Api/Services/SopToolRegistry.cs` | Declares the tool schemas (JSON Schema), provider-agnostic |
+| `backend/src/Api/Services/SopToolExecutor.cs` | Dispatches tool calls; owns the static product catalog |
+| `backend/src/Api/Services/OpenAIRetrievalChatService.cs` | Orchestrates the chat completion + tool-calling loop; forces a final answer on the last iteration by stripping tools |
+| `frontend/src/pages/ChatPage.tsx` | Chat state, conversation id, starter suggestions, ingest trigger |
 
-Please include a link to a public repo with your completed work. Include a video in the repo or a link to a video of you walking through the application and narrating the following:
+---
 
-- Demo of what you built demonstrating the required features.
-- How to run the app.
-- Key design decisions you made and why.
-- Any assumptions or shortcuts you made.
-- What you would prioritize improving if moving from POC to a more production-ready system.
+## Design decisions & tradeoffs
 
-The video should be under 5 minutes. We are looking for clear communication and insight into your thought process, not a polished presentation.
+### Header-aware chunking over fixed-size windows
+Splitting on `## ` boundaries gives each chunk one SOP section, so retrieved
+passages are semantically coherent and citations point at meaningful source
+locations ("Section 6. Cash Handling"). Oversized sections are sub-split on
+paragraph boundaries with a 2000-char cap. For a 33 KB document this produces
+~25 chunks — plenty of recall for the quiz-style questions in this domain.
 
-## What Good Scope Looks Like
+Tradeoff: questions that span multiple sections can miss context. For a larger
+corpus I would add an overlapping sliding window on top of the header split.
 
-A strong submission is not the most complex submission. A strong submission is one that makes sensible tradeoffs, keeps the implementation understandable, and clearly demonstrates the core competencies this role requires.
+### Two tools, different classes of question
+The challenge asked for tool-calling; the interesting design decision was
+*which tools*. `search_sop` is the obvious one — it's the RAG primitive. I
+added `lookup_product_location` specifically to demonstrate the judgment of
+*when NOT to RAG*: "where is the milk?" should be a structured lookup, not a
+vector search. The assistant picks correctly thanks to the system prompt +
+tool descriptions.
 
-## Final Notes
+The catalog is hardcoded in `SopToolExecutor.BuildCatalog()`. In production it
+would live in the product database.
 
-You will be provided a budgeted OpenAI API key for this challenge. Please be mindful of token usage and try to build a system that is efficient in its calls. Focus on demonstrating the core concepts rather than building a fully featured system. We are looking for clear evidence of good engineering judgment, practical design decisions, and the ability to connect the dots between document ingestion, retrieval, RAG, and a chat interface.
+### Deterministic termination: strip tools on last iteration
+A naive tool-calling loop can run forever if the model keeps calling tools
+without producing a final answer. I cap at 4 iterations and remove tools from
+the options on the final iteration so the model is *forced* to produce content.
+This is a small code change but a meaningful safety rail — worth calling out
+because I hit it during development (snake_case bug on tool args caused the
+model to retry because it kept getting `{"error": "item_name is required"}`).
 
-## AI Anticipated Questions
+### JSON vector store with atomic writes
+For ≤ a few thousand vectors, cosine similarity over an in-memory array is
+fast enough and eliminates all operational complexity. Persistence uses
+write-to-temp-then-rename so a crash mid-save can't corrupt the artifact.
+`LoadAsync` is lazy and cached behind a semaphore.
 
-**Q: Can I use AI coding assistants (Copilot, Claude Code, Cursor, etc.)?**
-A: Yes — this challenge is designed to be completed with AI assistance. We expect you to use these tools. What we evaluate is whether you understand the code you produce, make sound design decisions, and can explain your tradeoffs. AI-generated code that you clearly don't understand will count against you.
+### Provider-agnostic tool schema
+`IToolRegistryService` returns `ToolDefinition` (name + description + JSON
+Schema string), not OpenAI-specific types. The chat service converts to
+`ChatTool` at the boundary. If we swap to Anthropic or a local model, the
+registry doesn't change.
 
-**Q: Do I have to use the provided boilerplate?**
-A: No. You can modify it, extend it, or start from scratch. If you prefer Semantic Kernel, Microsoft Agent Framework, or another SDK, go ahead. The boilerplate is there to reduce setup time, not to constrain your approach. If you deviate significantly, briefly explain why in your submission notes.
+### Snake-case for tool I/O
+The OpenAI tool schema uses `snake_case` fields (`item_name`, `top_k`). The
+tool executor's deserializer must match — I configure
+`JsonNamingPolicy.SnakeCaseLower` for inbound args. Outbound payloads to the
+model also use snake_case so the model reads results in the same shape it
+reasoned about when generating the call.
 
-**Q: How polished does the frontend need to be?**
-A: Functional over beautiful. We're evaluating whether the chat works end-to-end, not CSS craftsmanship. If the UI clearly shows the conversation, citations, and an ingest trigger, that's sufficientbut we aren't opposed to a beautiful UI if that's your strength and you want to show it off.
+### Frontend kept intentionally small
+Tailwind v4 + ~150 lines of custom primitives (Button, Card, Input, Badge)
+rather than shadcn CLI. The scaffold's visual language is retained but rebuilt
+with utility classes so the UI is easy to theme. Starter questions surface the
+two tool paths so a reviewer can sanity-check behavior in under a minute.
 
-**Q: Do I need to write tests?**
-A: Tests are not required within the scope. If you have time and want to add a few unit tests for your chunking or retrieval logic, that's a nice bonus — but a working vertical slice takes priority.
+---
 
-**Q: What does "citations" mean in this context?**
-A: When the assistant answers a question using retrieved SOP chunks, include references to which chunks were used — the source section name and/or a text snippet. The boilerplate `CitationDto` has fields for `source`, `snippet`, and optional line numbers. You don't need a formal citation format; we just want to see that responses are traceable back to the source material.
+## What I'd ship next (from POC → production)
 
-**Q: For tool-calling, do I need OpenAI's function-calling specifically?**
-A: No. OpenAI function-calling is the most straightforward approach, but if you prefer to use Semantic Kernel's plugin system, or Agent Framework or a manual dispatch pattern, or another mechanism, that's fine. What matters is that the model can decide when to use a tool, the tool executes, and the result feeds back into the response.
+1. **Hybrid retrieval.** BM25 (keyword) + dense embeddings with reciprocal
+   rank fusion. Pure dense retrieval misses exact-token matches for things
+   like policy codes and dollar amounts.
+2. **Citation filtering.** Right now all top-k retrieved chunks surface as
+   citations. Post-filter to only the chunks actually referenced in the final
+   answer — either via an LLM re-read or by tagging tool results with chunk
+   IDs and matching tokens in the response.
+3. **Prompt-injection hardening.** SOP content is trusted here, but a
+   real-world system would process supplier / vendor docs. Wrap retrieved
+   content in explicit delimiters and strip `assistant:`-style patterns
+   before feeding back to the model.
+4. **Persisted conversations.** Currently `conversationId` is a UUID generated
+   in the browser; each message carries the full history. At scale, persist
+   server-side and send only a window.
+5. **Observability.** Structured logs exist; next steps are per-turn traces
+   with latency breakdowns (embed, search, LLM, tool), token counting, and a
+   basic eval harness (curated question → expected-facts regex) that runs on
+   CI.
+6. **Auth + tenancy.** Obvious gaps: auth, per-store scoping of the aisle map,
+   admin UI for re-ingesting when the SOP updates, role-based access (cashier
+   vs. manager content).
+7. **Real vector store once n > 10k.** pgvector or a dedicated store. The
+   JSON file works great for a POC; it stops scaling when load-from-disk
+   dominates cold start.
 
-**Q: What if I run out of time?**
-A: This assessment is not timed. You can take as long or as little time as you would like. It is scoped to take between 2-3 hours of focused work for an experienced engineer familiar with RAG. Some may finish in an hour and some may take longer. 
+---
+
+## Directory layout
+
+```
+.
+├── backend/
+│   └── src/Api/
+│       ├── Controllers/         # Health, Ingest, Chat
+│       ├── Contracts/           # API DTOs
+│       ├── Models/              # TextChunk, VectorRecord, ToolDefinition
+│       ├── Options/             # OpenAIOptions
+│       ├── Services/            # Chunking, Embedding, VectorStore,
+│       │                        #   ToolRegistry, ToolExecutor, ChatService
+│       ├── Data/                # vector-store.json (generated, gitignored)
+│       ├── appsettings.json
+│       └── Program.cs           # DI wiring + CORS
+├── frontend/
+│   └── src/
+│       ├── components/          # ChatTranscript, ChatComposer,
+│       │                        #   IngestPanel, CitationsPanel, ToolCallsPanel
+│       ├── components/ui/       # Button, Card, Input, Badge primitives
+│       ├── pages/ChatPage.tsx
+│       ├── services/apiClient.ts
+│       └── types/chat.ts
+└── knowledge-base/
+    └── Grocery_Store_SOP.md
+```
+
+---
+
+## Notes on AI assistance
+
+Built using Claude Code with human-driven design decisions. The debugging
+loop on the tool-call convergence issue (snake_case mismatch causing the
+model to retry the same tool call) is representative of the workflow: observe
+behavior → add targeted diagnostic logging → read the logs → fix the root
+cause. I kept the diagnostic log line in the code at debug level because it's
+useful for the next person who sees a weird tool-calling loop.

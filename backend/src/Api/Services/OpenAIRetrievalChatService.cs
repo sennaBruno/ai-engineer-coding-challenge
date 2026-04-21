@@ -1,0 +1,246 @@
+using System.ClientModel;
+using Api.Contracts;
+using Api.Models;
+using OpenAI.Chat;
+using OaChat = OpenAI.Chat;
+
+namespace Api.Services;
+
+/// <summary>
+/// Orchestrates a multi-turn, tool-calling chat completion grounded in the SOP.
+/// The model decides when to call a tool; we execute the tool, feed the result
+/// back as a tool message, and continue until the model produces a final answer
+/// or we hit the iteration guard.
+/// </summary>
+public sealed class OpenAIRetrievalChatService(
+    ChatClient chatClient,
+    IToolRegistryService toolRegistry,
+    ISopToolExecutor toolExecutor,
+    ILogger<OpenAIRetrievalChatService> logger) : IRetrievalChatService
+{
+    private const int MaxToolIterations = 4;
+
+    private const string SystemPrompt = """
+        You are the in-store assistant for a grocery store chain's employees.
+        Your job is to answer questions about the store's Standard Operating Procedures (SOP)
+        and related operational questions grounded in the ingested SOP document.
+
+        Tools available:
+          • search_sop(query, top_k?): semantic search over SOP passages. Use for procedures,
+            policies, numbers, safety rules, conduct standards, and any question that requires
+            grounded SOP context.
+          • lookup_product_location(item_name): deterministic aisle lookup. Use for
+            "where is X?" style product-location questions.
+
+        Rules:
+        1. Call at most ONE tool per user turn unless the question genuinely requires two
+           different lookups. Never call the same tool twice in a row with the same arguments.
+        2. After a tool returns, produce the final answer for the user. Do not re-call the tool
+           to "double-check" — trust the result.
+        3. Quote specific numbers, dollar limits, time windows, and temperatures verbatim from
+           the SOP. Never invent them.
+        4. If tool results don't contain the answer, say so plainly and suggest the employee
+           contact their supervisor or check a specific SOP section.
+        5. Be concise. Employees are on the floor — give them the answer, not a wall of text.
+        6. Refer to the store as "the store" or "our store" — do not invent a brand name.
+        """;
+
+    public async Task<ChatResponse> GenerateResponseAsync(
+        ChatRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var messages = BuildInitialMessages(request);
+        var options = BuildOptions(request.UseTools);
+
+        var allToolCalls = new List<string>();
+        var retrievedChunks = new Dictionary<string, VectorSearchMatch>(StringComparer.Ordinal);
+
+        for (var iteration = 0; iteration < MaxToolIterations; iteration++)
+        {
+            // On the final allowed iteration, strip tools from the options so the model
+            // is forced to produce a final text answer rather than looping on tool calls.
+            var iterationOptions = iteration == MaxToolIterations - 1
+                ? BuildOptions(useTools: false)
+                : options;
+
+            ClientResult<ChatCompletion> result;
+            try
+            {
+                result = await chatClient.CompleteChatAsync(messages, iterationOptions, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Chat completion failed on iteration {Iter}", iteration);
+                return new ChatResponse
+                {
+                    ConversationId = request.ConversationId,
+                    Status = "error",
+                    IsPlaceholder = false,
+                    AssistantMessage = $"I couldn't reach the language model: {ex.Message}",
+                    ToolCalls = allToolCalls,
+                    Citations = BuildCitations(retrievedChunks.Values)
+                };
+            }
+
+            var completion = result.Value;
+
+            logger.LogDebug(
+                "Iteration {Iter}: finish={Finish} toolCalls={Count}",
+                iteration, completion.FinishReason, completion.ToolCalls.Count);
+
+            if (completion.FinishReason == ChatFinishReason.ToolCalls && completion.ToolCalls.Count > 0)
+            {
+                messages.Add(new AssistantChatMessage(completion));
+
+                foreach (var toolCall in completion.ToolCalls)
+                {
+                    var argsJson = toolCall.FunctionArguments.ToString();
+                    allToolCalls.Add($"{toolCall.FunctionName}({argsJson})");
+
+                    var execution = await toolExecutor.ExecuteAsync(
+                        toolCall.FunctionName,
+                        argsJson,
+                        cancellationToken);
+
+                    foreach (var chunk in execution.RetrievedChunks)
+                    {
+                        retrievedChunks.TryAdd(chunk.Record.Id, chunk);
+                    }
+
+                    messages.Add(new ToolChatMessage(toolCall.Id, execution.JsonPayload));
+                }
+
+                continue;
+            }
+
+            var assistantText = ExtractText(completion);
+            return new ChatResponse
+            {
+                ConversationId = request.ConversationId,
+                Status = "ok",
+                IsPlaceholder = false,
+                AssistantMessage = string.IsNullOrWhiteSpace(assistantText)
+                    ? "I wasn't able to compose a response. Please try rephrasing your question."
+                    : assistantText,
+                ToolCalls = allToolCalls,
+                Citations = BuildCitations(retrievedChunks.Values)
+            };
+        }
+
+        return new ChatResponse
+        {
+            ConversationId = request.ConversationId,
+            Status = "tool-loop-exhausted",
+            IsPlaceholder = false,
+            AssistantMessage = "I called tools too many times without converging on an answer. " +
+                               "Try asking a more focused question.",
+            ToolCalls = allToolCalls,
+            Citations = BuildCitations(retrievedChunks.Values)
+        };
+    }
+
+    private List<OaChat.ChatMessage> BuildInitialMessages(ChatRequest request)
+    {
+        var messages = new List<OaChat.ChatMessage> { new SystemChatMessage(SystemPrompt) };
+
+        foreach (var dto in request.Messages)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Content))
+            {
+                continue;
+            }
+
+            switch (dto.Role?.ToLowerInvariant())
+            {
+                case "user":
+                    messages.Add(new UserChatMessage(dto.Content));
+                    break;
+                case "assistant":
+                    messages.Add(new AssistantChatMessage(dto.Content));
+                    break;
+                case "system":
+                    messages.Add(new SystemChatMessage(dto.Content));
+                    break;
+                default:
+                    // Unknown roles are treated as user input — safe default.
+                    messages.Add(new UserChatMessage(dto.Content));
+                    break;
+            }
+        }
+
+        return messages;
+    }
+
+    private ChatCompletionOptions BuildOptions(bool useTools)
+    {
+        var options = new ChatCompletionOptions
+        {
+            Temperature = 0.2f
+        };
+
+        if (!useTools)
+        {
+            return options;
+        }
+
+        foreach (var tool in toolRegistry.GetAvailableTools())
+        {
+            options.Tools.Add(ChatTool.CreateFunctionTool(
+                functionName: tool.Name,
+                functionDescription: tool.Description,
+                functionParameters: BinaryData.FromString(tool.ParametersSchemaJson)));
+        }
+
+        return options;
+    }
+
+    private static string ExtractText(ChatCompletion completion)
+    {
+        if (completion.Content.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Concat(completion.Content
+            .Where(part => part.Kind == ChatMessageContentPartKind.Text)
+            .Select(part => part.Text));
+    }
+
+    private static List<CitationDto> BuildCitations(IEnumerable<VectorSearchMatch> matches)
+    {
+        return matches
+            .OrderByDescending(match => match.Score)
+            .Select(match =>
+            {
+                var record = match.Record;
+                var section = record.Metadata.GetValueOrDefault("section", record.Source);
+                int? start = int.TryParse(record.Metadata.GetValueOrDefault("startLine"), out var s) ? s : null;
+                int? end = int.TryParse(record.Metadata.GetValueOrDefault("endLine"), out var e) ? e : null;
+
+                return new CitationDto
+                {
+                    Source = string.IsNullOrWhiteSpace(section) ? record.Source : section,
+                    Snippet = Summarize(record.ChunkText, 320),
+                    StartLine = start,
+                    EndLine = end
+                };
+            })
+            .ToList();
+    }
+
+    private static string Summarize(string text, int maxChars)
+    {
+        if (text.Length <= maxChars)
+        {
+            return text;
+        }
+
+        var slice = text[..maxChars].TrimEnd();
+        var lastSpace = slice.LastIndexOf(' ');
+        if (lastSpace > maxChars - 80)
+        {
+            slice = slice[..lastSpace];
+        }
+        return slice + "…";
+    }
+}

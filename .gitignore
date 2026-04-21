@@ -66,3 +66,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.gstack/
+
+# Generated vector store artifact
+backend/src/Api/Data/vector-store.json

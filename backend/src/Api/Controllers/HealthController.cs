@@ -17,8 +17,8 @@ public sealed class HealthController : ControllerBase
             UtcTime = DateTimeOffset.UtcNow,
             Notes =
             [
-                "Baseline scaffold is running.",
-                "AI, retrieval, and tool orchestration are intentionally left as TODO work."
+                "Ingest chunks the SOP on markdown H2 boundaries and embeds via OpenAI.",
+                "Chat grounds responses through two tools: search_sop (RAG) and lookup_product_location."
             ]
         });
     }
