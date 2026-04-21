@@ -63,6 +63,36 @@ The script:
 
 Other commands: `./scripts/dev.sh stop` · `./scripts/dev.sh logs`.
 
+### Running with Docker (prod-paritetic alternative)
+
+Same app, no local .NET SDK or Node required. Uses the `Dockerfile`s
+that would ship to production.
+
+```bash
+cp .env.example .env     # then edit OPENAI_API_KEY
+docker compose up --build
+```
+
+Open `http://localhost:5173` in a browser. Backend is at
+`http://localhost:5181`.
+
+- **Backend image:** multi-stage .NET 10 SDK build → slim aspnet:10.0
+  runtime. Runs as a non-root user, baked-in SOP document, writable
+  named volume for the JSON vector store.
+- **Frontend image:** Bun builds the Vite bundle, served by
+  `vite preview` (no nginx needed — the Vite static server is sufficient
+  for a local-first POC). Non-root user, health-checked.
+- **Wiring:** backend exposes 5181, frontend 5173. Both published on
+  the host so the browser reaches them directly. `depends_on:
+  service_healthy` gates frontend startup on backend health.
+
+Teardown:
+
+```bash
+docker compose down        # stop + remove containers, keep the vector store
+docker compose down -v     # also drop the named volume (forces re-ingest)
+```
+
 ### Running the eval harness
 
 Promptfoo runs 14 test cases against the live `/api/chat` endpoint covering

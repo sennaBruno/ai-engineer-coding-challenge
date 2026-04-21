@@ -1,0 +1,75 @@
+# Prod-paritetic orchestration for the Grocery SOP assistant.
+#
+# Why this exists alongside ./scripts/dev.sh:
+#   - dev.sh boots the app with hot-reload for fast iteration.
+#   - compose boots the app from built images, the same artifacts that
+#     would deploy to prod. No local .NET SDK or Node install required.
+#
+# Usage:
+#   cp .env.example .env        # then edit OPENAI_API_KEY
+#   docker compose up --build   # first run; --build not needed after
+#
+# Then open http://localhost:5173 in a browser. Backend health:
+#   curl http://localhost:5181/api/health
+#
+# Teardown:
+#   docker compose down         # stop + remove containers, keep volume
+#   docker compose down -v      # also drop the vector-store volume
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: grocery-sop-backend:latest
+    container_name: grocery-sop-backend
+    environment:
+      # Passed through without the :? validator so teardown commands
+      # (`compose down`, `compose ps`) still work without a .env present.
+      # The backend's Program.cs validates the key at startup and fails
+      # loudly if it's empty — same signal, no onboarding pegadinha.
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # The frontend container publishes port 5173 on the host, so the
+      # browser's Origin header is http://localhost:5173. Also cover the
+      # fallback ports dev.sh may use if 5173 is occupied.
+      Cors__AllowedOrigins__0: http://localhost:5173
+      Cors__AllowedOrigins__1: http://localhost:5174
+      Cors__AllowedOrigins__2: http://localhost:5175
+      Cors__AllowedOrigins__3: http://localhost:5176
+    ports:
+      - "5181:5181"
+    volumes:
+      # Named volume persists ingested vectors across container restarts.
+      # Drop with `docker compose down -v` to force re-ingest.
+      - vector-store:/app/Data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:5181/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # Browser calls the backend, not the container. So the URL must
+        # resolve from the host machine, not the frontend container.
+        VITE_API_BASE_URL: http://localhost:5181
+    image: grocery-sop-frontend:latest
+    container_name: grocery-sop-frontend
+    ports:
+      # Host port is overridable: if 5173 is already taken (another Vite
+      # project, dev.sh bumping ports, etc), set FRONTEND_HOST_PORT in
+      # .env to any of 5174-5176 (all covered by the backend CORS list).
+      - "${FRONTEND_HOST_PORT:-5173}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  vector-store:
+    name: grocery-sop-vector-store

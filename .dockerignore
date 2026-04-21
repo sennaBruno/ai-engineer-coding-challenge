@@ -1,0 +1,45 @@
+# Files the Docker build never needs. Keeps the build context small and
+# prevents secrets or local dev artifacts from leaking into images.
+
+# Build artifacts
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# Editor + OS
+**/.vscode/
+**/.idea/
+**/.vs/
+**/.DS_Store
+**/Thumbs.db
+
+# VCS
+**/.git/
+**/.gitignore
+
+# Logs
+**/*.log
+scripts/logs/
+
+# Local secrets / env
+.env
+.env.local
+**/.env.local
+**/appsettings.Development.json
+.local/
+
+# Generated artifacts that the app rebuilds on first run
+backend/src/Api/Data/vector-store.json
+
+# Dev tooling state
+.gstack/
+.claude/
+.agents/
+.agent/
+
+# Promptfoo cache — eval harness state, not part of the image
+.promptfoo/
+evals/.promptfoo/
+evals/node_modules/
