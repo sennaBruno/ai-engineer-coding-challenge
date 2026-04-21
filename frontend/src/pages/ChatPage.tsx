@@ -31,6 +31,7 @@ export function ChatPage() {
   const [conversationId] = useState(() => window.crypto.randomUUID())
   const [draft, setDraft] = useState('')
   const [sourcePath, setSourcePath] = useState(DEFAULT_SOURCE_PATH)
+  const [forceReingest, setForceReingest] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [isIngesting, setIsIngesting] = useState(false)
   const [citations, setCitations] = useState<Citation[]>([])
@@ -76,17 +77,27 @@ export function ChatPage() {
     }
   }, [])
 
-  async function handleIngest() {
+  async function handleIngest(shouldForce: boolean) {
     setIsIngesting(true)
-    setStatus({ tone: 'info', message: 'Ingesting SOP — chunking, embedding, persisting…' })
+    setStatus({
+      tone: 'info',
+      message: shouldForce
+        ? 'Re-ingesting SOP — rebuilding the vector store…'
+        : 'Ingesting SOP — chunking, embedding, persisting…',
+    })
 
     try {
-      const response = await apiClient.ingest({ sourcePath, forceReingest: false })
+      const response = await apiClient.ingest({ sourcePath, forceReingest: shouldForce })
       setChunksIngested(response.recordsPersisted)
       setStatus({
         tone: response.accepted ? 'success' : 'warning',
         message: response.message,
       })
+      // One-shot: uncheck after a successful forced rebuild so a second click
+      // doesn't silently re-embed on every press.
+      if (shouldForce && response.accepted) {
+        setForceReingest(false)
+      }
     } catch (error) {
       setStatus({
         tone: 'error',
@@ -198,6 +209,8 @@ export function ChatPage() {
           onIngest={handleIngest}
           isBusy={isIngesting}
           chunksIngested={chunksIngested}
+          forceReingest={forceReingest}
+          onForceReingestChange={setForceReingest}
         />
         <ToolCallsPanel toolCalls={toolCalls} />
         <CitationsPanel citations={citations} />

@@ -173,6 +173,17 @@ public sealed class IngestController(
             candidates.Add(Path.GetFullPath(Path.Combine(knowledgeBaseRoot, Path.GetFileName(normalized))));
         }
 
+        // Resolve the root with symlinks followed, so both sides of the containment
+        // check are in the same realpath space.
+        var resolvedRoot = ResolveLinksFully(knowledgeBaseRoot);
+        if (resolvedRoot is null)
+        {
+            return null;
+        }
+        var rootWithSep = resolvedRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? resolvedRoot
+            : resolvedRoot + Path.DirectorySeparatorChar;
+
         foreach (var candidate in candidates)
         {
             if (!System.IO.File.Exists(candidate))
@@ -180,17 +191,92 @@ public sealed class IngestController(
                 continue;
             }
 
-            // Resolve any symlinks before the containment check so a symlink inside
-            // knowledge-base pointing to /etc/passwd doesn't slip through.
-            var resolved = Path.GetFullPath(new FileInfo(candidate).ResolveLinkTarget(true)?.FullName ?? candidate);
-            var rootWithSep = knowledgeBaseRoot.EndsWith(Path.DirectorySeparatorChar)
-                ? knowledgeBaseRoot
-                : knowledgeBaseRoot + Path.DirectorySeparatorChar;
+            // Realpath the candidate AND every parent directory. Resolving only the
+            // final file misses the case where a parent dir itself is a symlink
+            // pointing outside the knowledge-base/ tree.
+            var resolved = ResolveLinksFully(candidate);
+            if (resolved is null)
+            {
+                continue;
+            }
             if (resolved.StartsWith(rootWithSep, StringComparison.Ordinal))
             {
                 return resolved;
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// Walks every path segment and follows symlinks so the returned path is a
+    /// realpath — no symlinks anywhere in the chain. Prevents parent-directory
+    /// symlink bypasses (codex P2): a symlinked dir inside knowledge-base/
+    /// pointing elsewhere used to pass the final-file-only resolve.
+    /// </summary>
+    private static string? ResolveLinksFully(string path)
+    {
+        try
+        {
+            var absolute = Path.GetFullPath(path);
+            var fsInfo = System.IO.File.Exists(absolute)
+                ? (FileSystemInfo)new FileInfo(absolute)
+                : Directory.Exists(absolute) ? new DirectoryInfo(absolute) : null;
+            if (fsInfo is null)
+            {
+                return null;
+            }
+
+            // LinkTarget + recursive resolution catches chained symlinks; if the
+            // target is itself a FileInfo, fold back through the same helper. .NET's
+            // ResolveLinkTarget(returnFinalTarget:true) follows the chain in one call.
+            var target = fsInfo.ResolveLinkTarget(returnFinalTarget: true);
+            var resolvedFile = Path.GetFullPath(target?.FullName ?? absolute);
+
+            // Now walk every parent dir and resolve each segment in turn.
+            var dir = Path.GetDirectoryName(resolvedFile);
+            if (string.IsNullOrEmpty(dir))
+            {
+                return resolvedFile;
+            }
+
+            var resolvedDir = ResolveDirectoryLinks(dir);
+            return resolvedDir is null
+                ? null
+                : Path.Combine(resolvedDir, Path.GetFileName(resolvedFile));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveDirectoryLinks(string dir)
+    {
+        try
+        {
+            var absolute = Path.GetFullPath(dir);
+            var info = new DirectoryInfo(absolute);
+            if (!info.Exists)
+            {
+                return null;
+            }
+            var target = info.ResolveLinkTarget(returnFinalTarget: true);
+            var resolved = Path.GetFullPath(target?.FullName ?? absolute);
+
+            var parent = Path.GetDirectoryName(resolved);
+            if (string.IsNullOrEmpty(parent) || parent == resolved)
+            {
+                return resolved;
+            }
+
+            var resolvedParent = ResolveDirectoryLinks(parent);
+            return resolvedParent is null
+                ? null
+                : Path.Combine(resolvedParent, Path.GetFileName(resolved));
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

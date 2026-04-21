@@ -6,9 +6,11 @@ import { Input } from '@/components/ui/Input'
 interface IngestPanelProps {
   sourcePath: string
   onSourcePathChange: (value: string) => void
-  onIngest: () => void
+  onIngest: (forceReingest: boolean) => void
   isBusy: boolean
   chunksIngested?: number
+  forceReingest: boolean
+  onForceReingestChange: (value: boolean) => void
 }
 
 export function IngestPanel({
@@ -17,6 +19,8 @@ export function IngestPanel({
   onIngest,
   isBusy,
   chunksIngested,
+  forceReingest,
+  onForceReingestChange,
 }: IngestPanelProps) {
   return (
     <Card>
@@ -44,6 +48,17 @@ export function IngestPanel({
           />
         </div>
 
+        <label className="flex items-center gap-2 text-xs text-muted cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 accent-primary"
+            checked={forceReingest}
+            onChange={(event) => onForceReingestChange(event.target.checked)}
+            disabled={isBusy}
+          />
+          Force re-ingest (rebuilds the vector store even if records already exist)
+        </label>
+
         <div className="flex items-center justify-between gap-3">
           {typeof chunksIngested === 'number' && chunksIngested > 0 ? (
             <span className="text-xs text-muted">
@@ -56,10 +71,10 @@ export function IngestPanel({
             type="button"
             variant="secondary"
             size="sm"
-            onClick={onIngest}
+            onClick={() => onIngest(forceReingest)}
             disabled={isBusy || sourcePath.trim().length === 0}
           >
-            {isBusy ? 'Ingesting…' : 'Run ingest'}
+            {isBusy ? 'Ingesting…' : forceReingest ? 'Re-ingest' : 'Run ingest'}
           </Button>
         </div>
       </CardContent>
