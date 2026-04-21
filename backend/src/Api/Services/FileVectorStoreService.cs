@@ -15,6 +15,7 @@ public sealed class FileVectorStoreService : IVectorStoreService
     private readonly SemaphoreSlim _ioLock = new(1, 1);
     private readonly ILogger<FileVectorStoreService> _logger;
     private List<VectorRecord>? _cache;
+    private int _loggedDimensionMismatch;
 
     public FileVectorStoreService(
         IConfiguration configuration,
@@ -76,6 +77,24 @@ public sealed class FileVectorStoreService : IVectorStoreService
         var queryNorm = Norm(queryEmbedding);
         if (queryNorm == 0)
         {
+            return [];
+        }
+
+        // Fail loudly (once) if the stored vectors don't match the query model's
+        // dimension — otherwise CosineSimilarity returns 0 for every record and
+        // the UI silently shows empty results, masking a stale vector-store.json.
+        // Realistic trigger: the embedding model is changed in appsettings without
+        // re-ingesting.
+        var expectedDim = queryEmbedding.Length;
+        if (records[0].Embedding.Length != expectedDim)
+        {
+            if (Interlocked.Exchange(ref _loggedDimensionMismatch, 1) == 0)
+            {
+                _logger.LogError(
+                    "Vector-store embedding dimension mismatch: stored={Stored} query={Query}. Re-run POST /api/ingest with forceReingest=true after changing the embedding model.",
+                    records[0].Embedding.Length,
+                    expectedDim);
+            }
             return [];
         }
 

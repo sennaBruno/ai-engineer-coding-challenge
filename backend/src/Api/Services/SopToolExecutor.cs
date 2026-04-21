@@ -148,8 +148,14 @@ public sealed class SopToolExecutor(
         // contained by the query. Non-deterministic dictionary-order FirstOrDefault
         // previously made "ice" match either "ice cream" or "rice" depending on
         // insertion order.
+        //
+        // Reject pathologically short queries (e.g. "a", "s") from the substring
+        // fallback — they would match half the catalog by accident and pick the
+        // shortest key as a winner. Exact-match only for queries under 3 chars.
+        const int MinSubstringQueryLength = 3;
         ProductLocation? location = null;
-        if (!ProductCatalog.TryGetValue(normalized, out location))
+        if (!ProductCatalog.TryGetValue(normalized, out location) &&
+            normalized.Length >= MinSubstringQueryLength)
         {
             var ranked = ProductCatalog
                 .Where(entry => entry.Key.Contains(normalized) || normalized.Contains(entry.Key))

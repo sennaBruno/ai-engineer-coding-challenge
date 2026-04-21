@@ -21,8 +21,15 @@ async function request<TResponse>(path: string, init?: RequestInit): Promise<TRe
     let errorMessage = `Request failed with status ${response.status}`
 
     try {
-      const errorBody = (await response.json()) as { error?: string }
-      if (errorBody.error) {
+      const errorBody = (await response.json()) as {
+        error?: string
+        assistantMessage?: string
+      }
+      // Chat errors (502) carry an assistantMessage plus Status="error"; surface
+      // that user-facing message directly. Other endpoints use { error: "..." }.
+      if (errorBody.assistantMessage) {
+        errorMessage = errorBody.assistantMessage
+      } else if (errorBody.error) {
         errorMessage = errorBody.error
       }
     } catch {

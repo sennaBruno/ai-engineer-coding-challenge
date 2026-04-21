@@ -56,28 +56,37 @@ builder.Services.AddSingleton<IRetrievalChatService, OpenAIRetrievalChatService>
 
 var app = builder.Build();
 
-// Global exception handler. Every unhandled exception becomes a uniform
-// { "error": "..." } JSON body so the TypeScript client's error parser sees
-// a consistent shape. Full details land in the logger for operators.
-app.UseExceptionHandler(errorApp =>
+if (app.Environment.IsDevelopment())
 {
-    errorApp.Run(async context =>
+    // Inline stack traces during local debugging. Production keeps the sanitised
+    // { "error": "..." } handler below so raw exception text never reaches clients.
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    // Global exception handler. Every unhandled exception becomes a uniform
+    // { "error": "..." } JSON body so the TypeScript client's error parser sees
+    // a consistent shape. Full details land in the logger for operators.
+    app.UseExceptionHandler(errorApp =>
     {
-        var feature = context.Features.Get<IExceptionHandlerFeature>();
-        var ex = feature?.Error;
-        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
-            .CreateLogger("UnhandledException");
-        logger.LogError(ex, "Unhandled exception on {Path}", context.Request.Path);
-
-        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-        context.Response.ContentType = "application/json";
-        var body = JsonSerializer.Serialize(new
+        errorApp.Run(async context =>
         {
-            error = "An unexpected error occurred. Check the server logs for details."
+            var feature = context.Features.Get<IExceptionHandlerFeature>();
+            var ex = feature?.Error;
+            var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("UnhandledException");
+            logger.LogError(ex, "Unhandled exception on {Path}", context.Request.Path);
+
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/json";
+            var body = JsonSerializer.Serialize(new
+            {
+                error = "An unexpected error occurred. Check the server logs for details."
+            });
+            await context.Response.WriteAsync(body);
         });
-        await context.Response.WriteAsync(body);
     });
-});
+}
 
 app.UseCors("LocalFrontend");
 app.MapControllers();

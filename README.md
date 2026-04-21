@@ -181,6 +181,30 @@ rather than shadcn CLI. The scaffold's visual language is retained but rebuilt
 with utility classes so the UI is easy to theme. Starter questions surface the
 two tool paths so a reviewer can sanity-check behavior in under a minute.
 
+### Security + abuse guards (applied to the POC)
+Even as a POC, unauthenticated endpoints that proxy to a paid API need basic
+hygiene. What's in place:
+
+- **Path containment on ingest.** Supplied `sourcePath` must resolve (after
+  symlink follow) under the repo's `knowledge-base/` directory. Blocks
+  `../../etc/passwd`, absolute `/etc/...`, and symlink escapes.
+- **DoS / wallet-drain caps on chat.** Max 40 messages per request, 8 KB per
+  message. A 10 MB size cap on ingest sources prevents a huge file from
+  dominating the embedding bill.
+- **Prompt-injection delimiters.** Retrieved SOP chunks are wrapped in
+  `<sop_chunk section="…" lines="…">…</sop_chunk>` and the system prompt
+  instructs the model to treat that content as untrusted data.
+- **Role demotion.** If a client request body tries to slip in a `system`
+  role, the server logs and demotes it to `user` — the only system prompt
+  the model sees is the server's.
+- **Embedding dimension guard.** If stored vectors don't match the query
+  model's dimension (e.g., someone changed the embedding model without
+  re-ingesting), the vector store logs an error and returns no matches
+  instead of silently returning zero-score garbage.
+- **Dev vs. prod error shapes.** Development uses the developer exception
+  page for inline stack traces; production hides exception text behind a
+  uniform `{ "error": "…" }` JSON shape.
+
 ---
 
 ## What I'd ship next (from POC → production)
@@ -188,14 +212,15 @@ two tool paths so a reviewer can sanity-check behavior in under a minute.
 1. **Hybrid retrieval.** BM25 (keyword) + dense embeddings with reciprocal
    rank fusion. Pure dense retrieval misses exact-token matches for things
    like policy codes and dollar amounts.
-2. **Citation filtering.** Right now all top-k retrieved chunks surface as
-   citations. Post-filter to only the chunks actually referenced in the final
-   answer — either via an LLM re-read or by tagging tool results with chunk
-   IDs and matching tokens in the response.
-3. **Prompt-injection hardening.** SOP content is trusted here, but a
-   real-world system would process supplier / vendor docs. Wrap retrieved
-   content in explicit delimiters and strip `assistant:`-style patterns
-   before feeding back to the model.
+2. **Citation filtering.** Right now all retrieved chunks across a turn
+   surface as citations (kept max-scored per chunk ID). Next step is to
+   post-filter to only the chunks actually referenced in the final answer —
+   either via an LLM re-read or by tagging tool results with chunk IDs and
+   matching tokens in the response.
+3. **Extended prompt-injection hardening.** Delimiters + role demotion are
+   in place. A real-world system processing supplier / vendor docs would add
+   classifier-based detection of `assistant:`-style patterns before chunks
+   hit the model, and ensembled guards (canary tokens, content classifiers).
 4. **Persisted conversations.** Currently `conversationId` is a UUID generated
    in the browser; each message carries the full history. At scale, persist
    server-side and send only a window.
@@ -203,12 +228,23 @@ two tool paths so a reviewer can sanity-check behavior in under a minute.
    with latency breakdowns (embed, search, LLM, tool), token counting, and a
    basic eval harness (curated question → expected-facts regex) that runs on
    CI.
-6. **Auth + tenancy.** Obvious gaps: auth, per-store scoping of the aisle map,
-   admin UI for re-ingesting when the SOP updates, role-based access (cashier
-   vs. manager content).
-7. **Real vector store once n > 10k.** pgvector or a dedicated store. The
-   JSON file works great for a POC; it stops scaling when load-from-disk
-   dominates cold start.
+6. **Timeout budget on OpenAI calls.** Today a stuck OpenAI request sits for
+   the SDK's default (~100 s) times 4 tool iterations. Production should wrap
+   the loop in a `CancellationTokenSource` with a hard ~30 s overall budget
+   and surface a retry-friendly error.
+7. **Concurrent ingest guard.** The current TOCTOU (load → check → save) is
+   fine for single-writer POC use but two simultaneous `POST /api/ingest`
+   calls could race. Production would take a distributed lock or enqueue
+   ingests to a single-worker job.
+8. **Frontend history windowing.** The client sends the full message history
+   each turn. The backend caps at 40, but the UX should trim gracefully and
+   show a "start a new conversation" hint before hitting the wall.
+9. **Auth + tenancy.** Obvious gaps: auth, per-store scoping of the aisle
+   map, admin UI for re-ingesting when the SOP updates, role-based access
+   (cashier vs. manager content).
+10. **Real vector store once n > 10k.** pgvector or a dedicated store. The
+    JSON file works great for a POC; it stops scaling when load-from-disk
+    dominates cold start.
 
 ---
 

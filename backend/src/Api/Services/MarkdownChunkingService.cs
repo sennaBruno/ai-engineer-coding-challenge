@@ -8,7 +8,8 @@ namespace Api.Services;
 /// Splits on H2 (##) boundaries so each chunk corresponds to a logical SOP section,
 /// which keeps retrieved context semantically coherent and makes citations meaningful.
 /// Oversized sections are sub-split on paragraph boundaries to respect the embedding
-/// context window and retrieval recall.
+/// context window and retrieval recall. Line ranges are tracked per emitted piece so
+/// citations point at the exact paragraph span, not just the enclosing section.
 /// </summary>
 public sealed class MarkdownChunkingService : IChunkingService
 {
@@ -29,22 +30,23 @@ public sealed class MarkdownChunkingService : IChunkingService
         foreach (var section in sections)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var body = section.BodyBuilder.ToString().Trim();
+
+            var body = JoinParagraphs(section.Paragraphs).Trim();
             if (body.Length < MinChunkChars)
             {
                 continue;
             }
 
-            foreach (var piece in SplitLongSection(body))
+            foreach (var piece in SplitLongSection(section))
             {
                 chunks.Add(new TextChunk
                 {
                     Source = sourceName,
                     Index = chunkIndex++,
-                    Content = FormatChunkContent(section.Title, piece),
+                    Content = FormatChunkContent(section.Title, piece.Body),
                     Section = section.Title,
-                    StartLine = section.StartLine,
-                    EndLine = section.EndLine
+                    StartLine = piece.StartLine,
+                    EndLine = piece.EndLine
                 });
             }
         }
@@ -56,6 +58,20 @@ public sealed class MarkdownChunkingService : IChunkingService
     {
         var sections = new List<SectionBuffer>();
         SectionBuffer? current = null;
+        Paragraph? paragraph = null;
+
+        void FlushParagraph()
+        {
+            if (paragraph is not null && paragraph.Builder.Length > 0)
+            {
+                paragraph.Text = paragraph.Builder.ToString().TrimEnd();
+                if (!string.IsNullOrWhiteSpace(paragraph.Text))
+                {
+                    current!.Paragraphs.Add(paragraph);
+                }
+            }
+            paragraph = null;
+        }
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -64,36 +80,40 @@ public sealed class MarkdownChunkingService : IChunkingService
 
             if (line.StartsWith("## "))
             {
+                FlushParagraph();
                 if (current is not null)
                 {
-                    current.EndLine = lineNumber - 1;
                     sections.Add(current);
                 }
 
                 current = new SectionBuffer
                 {
                     Title = line[3..].Trim(),
-                    StartLine = lineNumber,
-                    EndLine = lineNumber
+                    StartLine = lineNumber
                 };
                 continue;
             }
 
-            if (current is null)
+            current ??= new SectionBuffer
             {
                 // Preamble (title, intro) — emit as a synthetic "Document Header" section.
-                current = new SectionBuffer
-                {
-                    Title = "Document Header",
-                    StartLine = lineNumber,
-                    EndLine = lineNumber
-                };
+                Title = "Document Header",
+                StartLine = lineNumber
+            };
+
+            // Blank line ends the current paragraph.
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                FlushParagraph();
+                continue;
             }
 
-            current.BodyBuilder.AppendLine(line);
-            current.EndLine = lineNumber;
+            paragraph ??= new Paragraph { StartLine = lineNumber };
+            paragraph.Builder.AppendLine(line);
+            paragraph.EndLine = lineNumber;
         }
 
+        FlushParagraph();
         if (current is not null)
         {
             sections.Add(current);
@@ -102,23 +122,35 @@ public sealed class MarkdownChunkingService : IChunkingService
         return sections;
     }
 
-    private static IEnumerable<string> SplitLongSection(string body)
+    private static IEnumerable<ChunkPiece> SplitLongSection(SectionBuffer section)
     {
-        if (body.Length <= MaxChunkChars)
+        var paragraphs = section.Paragraphs;
+        if (paragraphs.Count == 0)
         {
-            yield return body;
             yield break;
         }
 
-        var paragraphs = body.Split("\n\n", StringSplitOptions.RemoveEmptyEntries);
-        var buffer = new StringBuilder();
-
-        foreach (var paragraph in paragraphs)
+        var combined = JoinParagraphs(paragraphs);
+        if (combined.Length <= MaxChunkChars)
         {
-            if (buffer.Length > 0 && buffer.Length + paragraph.Length + 2 > MaxChunkChars)
+            yield return new ChunkPiece(
+                combined.Trim(),
+                paragraphs[0].StartLine,
+                paragraphs[^1].EndLine);
+            yield break;
+        }
+
+        var buffer = new StringBuilder();
+        var pieceStartLine = paragraphs[0].StartLine;
+        var pieceEndLine = paragraphs[0].EndLine;
+
+        foreach (var para in paragraphs)
+        {
+            if (buffer.Length > 0 && buffer.Length + para.Text.Length + 2 > MaxChunkChars)
             {
-                yield return buffer.ToString().Trim();
+                yield return new ChunkPiece(buffer.ToString().Trim(), pieceStartLine, pieceEndLine);
                 buffer.Clear();
+                pieceStartLine = para.StartLine;
             }
 
             if (buffer.Length > 0)
@@ -126,13 +158,19 @@ public sealed class MarkdownChunkingService : IChunkingService
                 buffer.Append("\n\n");
             }
 
-            buffer.Append(paragraph);
+            buffer.Append(para.Text);
+            pieceEndLine = para.EndLine;
         }
 
         if (buffer.Length > 0)
         {
-            yield return buffer.ToString().Trim();
+            yield return new ChunkPiece(buffer.ToString().Trim(), pieceStartLine, pieceEndLine);
         }
+    }
+
+    private static string JoinParagraphs(List<Paragraph> paragraphs)
+    {
+        return string.Join("\n\n", paragraphs.Select(p => p.Text));
     }
 
     private static string FormatChunkContent(string sectionTitle, string body)
@@ -145,8 +183,17 @@ public sealed class MarkdownChunkingService : IChunkingService
     private sealed class SectionBuffer
     {
         public string Title { get; set; } = string.Empty;
-        public StringBuilder BodyBuilder { get; } = new();
+        public int StartLine { get; set; }
+        public List<Paragraph> Paragraphs { get; } = new();
+    }
+
+    private sealed class Paragraph
+    {
+        public StringBuilder Builder { get; } = new();
+        public string Text { get; set; } = string.Empty;
         public int StartLine { get; set; }
         public int EndLine { get; set; }
     }
+
+    private readonly record struct ChunkPiece(string Body, int StartLine, int EndLine);
 }

@@ -112,7 +112,15 @@ public sealed class OpenAIRetrievalChatService(
 
                     foreach (var chunk in execution.RetrievedChunks)
                     {
-                        retrievedChunks.TryAdd(chunk.Record.Id, chunk);
+                        // Keep the highest-scoring occurrence when the same chunk is
+                        // retrieved across multiple tool calls within one turn.
+                        // TryAdd previously kept first-seen score which could show
+                        // a weaker match than what actually anchored the answer.
+                        if (!retrievedChunks.TryGetValue(chunk.Record.Id, out var existing)
+                            || chunk.Score > existing.Score)
+                        {
+                            retrievedChunks[chunk.Record.Id] = chunk;
+                        }
                     }
 
                     messages.Add(new ToolChatMessage(toolCall.Id, execution.JsonPayload));

@@ -35,6 +35,15 @@ public sealed class ChatController(IRetrievalChatService retrievalChatService) :
         }
 
         var response = await retrievalChatService.GenerateResponseAsync(request, cancellationToken);
-        return Ok(response);
+
+        // Surface upstream model failures as HTTP 502 so log-based alerting and the
+        // TypeScript client's !response.ok branch both trigger correctly. The JSON
+        // body shape stays the same, so the frontend still sees the assistant text
+        // and can render the error banner.
+        return response.Status switch
+        {
+            "error" => StatusCode(StatusCodes.Status502BadGateway, response),
+            _ => Ok(response)
+        };
     }
 }
