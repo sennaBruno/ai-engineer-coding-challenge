@@ -17,9 +17,14 @@ public sealed class ChatController(IRetrievalChatService retrievalChatService) :
 
     [HttpPost]
     public async Task<ActionResult<ChatResponse>> Post(
-        [FromBody] ChatRequest request,
+        [FromBody] ChatRequest? request,
         CancellationToken cancellationToken)
     {
+        if (request is null)
+        {
+            return BadRequest(new { error = "Request body is required." });
+        }
+
         if (request.Messages.Count == 0)
         {
             return BadRequest(new { error = "At least one chat message is required." });

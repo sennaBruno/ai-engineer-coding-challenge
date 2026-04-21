@@ -21,6 +21,9 @@ public sealed class IngestController(
     // memory or trigger an unbounded embedding bill. 10 MB fits anything reasonable
     // for an SOP document.
     private const long MaxSourceFileBytes = 10 * 1024 * 1024;
+    // Byte cap alone isn't enough: 10 MB of 1-char paragraphs = 100K chunks, each billed
+    // as a separate embedding. Cap chunk count before calling the embedding API.
+    private const int MaxChunks = 500;
 
     [HttpPost]
     public async Task<ActionResult<IngestResponse>> Post(
@@ -87,6 +90,15 @@ public sealed class IngestController(
                 ChunksCreated = 0,
                 RecordsPersisted = 0,
                 VectorStorePath = vectorStorePath
+            });
+        }
+
+        if (chunks.Count > MaxChunks)
+        {
+            return BadRequest(new
+            {
+                error = $"Chunking produced {chunks.Count} chunks, exceeding the {MaxChunks} cap. " +
+                        "This prevents runaway embedding spend on pathological input."
             });
         }
 

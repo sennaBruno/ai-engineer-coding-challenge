@@ -19,6 +19,19 @@ public sealed class OpenAIRetrievalChatService(
     ILogger<OpenAIRetrievalChatService> logger) : IRetrievalChatService
 {
     private const int MaxToolIterations = 4;
+    // Cap on tool calls the model can emit per iteration. Without this, a malformed
+    // completion could request dozens of tool calls and each one costs an embedding
+    // or catalog lookup. 3 comfortably covers legitimate "two tools for one question"
+    // plus headroom; anything above is dropped with a synthetic error message.
+    private const int MaxToolCallsPerIteration = 3;
+    // Per-OpenAI-call wall clock cap. The HttpClient default is 100s — too long for
+    // a chat UI and a wallet risk (slow-loris from the upstream side keeps our
+    // connection slot open). 30s is plenty for gpt-4o-mini + tool calls.
+    private static readonly TimeSpan OpenAiCallTimeout = TimeSpan.FromSeconds(30);
+    // Output token cap per completion. gpt-4o-mini can emit ~16k tokens in theory.
+    // Real answers for an in-store employee assistant are a paragraph. Cap at ~800
+    // tokens to short-circuit a runaway completion before it charges us.
+    private const int MaxOutputTokens = 800;
 
     private const string SystemPrompt = """
         You are the in-store assistant for a grocery store chain's employees.
@@ -76,9 +89,11 @@ public sealed class OpenAIRetrievalChatService(
                 : options;
 
             ClientResult<ChatCompletion> result;
+            using var callCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            callCts.CancelAfter(OpenAiCallTimeout);
             try
             {
-                result = await chatClient.CompleteChatAsync(messages, iterationOptions, cancellationToken);
+                result = await chatClient.CompleteChatAsync(messages, iterationOptions, callCts.Token);
             }
             catch (Exception ex)
             {
@@ -106,7 +121,26 @@ public sealed class OpenAIRetrievalChatService(
             {
                 messages.Add(new AssistantChatMessage(completion));
 
-                foreach (var toolCall in completion.ToolCalls)
+                var toolCallsThisIter = completion.ToolCalls.Count > MaxToolCallsPerIteration
+                    ? completion.ToolCalls.Take(MaxToolCallsPerIteration).ToList()
+                    : (IReadOnlyList<ChatToolCall>)completion.ToolCalls;
+
+                if (completion.ToolCalls.Count > MaxToolCallsPerIteration)
+                {
+                    logger.LogWarning(
+                        "Model emitted {Count} tool calls in one iteration; capping at {Max}.",
+                        completion.ToolCalls.Count, MaxToolCallsPerIteration);
+                    // Feed synthetic tool responses for the dropped calls so the
+                    // assistant message stays well-formed (OpenAI requires a tool
+                    // response for each tool_call id on the assistant message).
+                    foreach (var dropped in completion.ToolCalls.Skip(MaxToolCallsPerIteration))
+                    {
+                        messages.Add(new ToolChatMessage(dropped.Id,
+                            """{"error":"tool call suppressed: too many tool calls in one turn"}"""));
+                    }
+                }
+
+                foreach (var toolCall in toolCallsThisIter)
                 {
                     var argsJson = toolCall.FunctionArguments.ToString();
                     allToolCalls.Add($"{toolCall.FunctionName}({argsJson})");
@@ -213,7 +247,8 @@ public sealed class OpenAIRetrievalChatService(
     {
         var options = new ChatCompletionOptions
         {
-            Temperature = 0.2f
+            Temperature = 0.2f,
+            MaxOutputTokenCount = MaxOutputTokens
         };
 
         if (!useTools)

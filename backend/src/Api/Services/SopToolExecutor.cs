@@ -72,17 +72,29 @@ public sealed class SopToolExecutor(
         var queryEmbedding = await embeddingService.EmbedAsync(args.Query, ct);
         var matches = await vectorStore.SearchAsync(queryEmbedding, topK, ct);
 
-        if (matches.Count == 0)
+        // Similarity floor. text-embedding-3-small cosine scores below ~0.35 are
+        // typically unrelated noise; feeding them to the model as "grounding" is
+        // how RAG systems start hallucinating confidently. Drop below-floor matches
+        // so the model is forced into the "no relevant passage" branch instead of
+        // stitching together weakly-related chunks.
+        const double MinRelevanceScore = 0.35;
+        var strongMatches = matches.Where(m => m.Score >= MinRelevanceScore).ToList();
+
+        if (strongMatches.Count == 0)
         {
             return new ToolExecutionResult(
                 JsonSerializer.Serialize(new
                 {
                     query = args.Query,
                     results = Array.Empty<object>(),
-                    note = "No SOP content found. The document may not be ingested yet."
+                    note = matches.Count == 0
+                        ? "No SOP content found. The document may not be ingested yet."
+                        : "No SOP passage was relevant enough to answer this question. " +
+                          "Tell the user the SOP does not cover it and suggest asking a supervisor."
                 }, OutputJsonOptions),
                 []);
         }
+        matches = strongMatches;
 
         // Wrap each chunk body in <sop_chunk> delimiters. The system prompt instructs
         // the model to treat content inside these tags as untrusted data, not instructions
@@ -155,26 +167,23 @@ public sealed class SopToolExecutor(
         // fallback — they would match half the catalog by accident and pick the
         // shortest key as a winner. Exact-match only for queries under 3 chars.
         const int MinSubstringQueryLength = 3;
-        ProductLocation? location = null;
-        if (!ProductCatalog.TryGetValue(normalized, out location) &&
-            normalized.Length >= MinSubstringQueryLength)
+
+        // Exact catalog hit wins — short-circuit the ambiguity path.
+        if (ProductCatalog.TryGetValue(normalized, out var exact))
         {
-            var ranked = ProductCatalog
-                .Where(entry => entry.Key.Contains(normalized) || normalized.Contains(entry.Key))
-                .Select(entry => new
+            return new ToolExecutionResult(
+                JsonSerializer.Serialize(new
                 {
-                    entry.Key,
-                    entry.Value,
-                    PrefixMatch = entry.Key.StartsWith(normalized) || normalized.StartsWith(entry.Key) ? 0 : 1,
-                    Length = entry.Key.Length
-                })
-                .OrderBy(x => x.PrefixMatch)
-                .ThenBy(x => x.Length)
-                .FirstOrDefault();
-            location = ranked?.Value;
+                    item = args.ItemName,
+                    found = true,
+                    department = exact.Department,
+                    aisle = exact.Aisle,
+                    notes = exact.Notes
+                }, OutputJsonOptions),
+                []);
         }
 
-        if (location is null)
+        if (normalized.Length < MinSubstringQueryLength)
         {
             return new ToolExecutionResult(
                 JsonSerializer.Serialize(new
@@ -186,14 +195,69 @@ public sealed class SopToolExecutor(
                 []);
         }
 
+        // Gather all substring candidates ranked deterministically. When more than
+        // one matches (e.g. "chicken soup" → "chicken" AND "soup" wouldn't, but
+        // "ice" → "ice cream" AND "rice"), surface the top 3 to the model with a
+        // disambiguation flag. The model then asks the user "did you mean X or Y?"
+        // instead of silently picking a winner — a POC-visible risk the reviewer
+        // flagged.
+        var candidates = ProductCatalog
+            .Where(entry => entry.Key.Contains(normalized) || normalized.Contains(entry.Key))
+            .Select(entry => new
+            {
+                entry.Key,
+                entry.Value,
+                PrefixMatch = entry.Key.StartsWith(normalized) || normalized.StartsWith(entry.Key) ? 0 : 1,
+                Length = entry.Key.Length
+            })
+            .OrderBy(x => x.PrefixMatch)
+            .ThenBy(x => x.Length)
+            .Take(3)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return new ToolExecutionResult(
+                JsonSerializer.Serialize(new
+                {
+                    item = args.ItemName,
+                    found = false,
+                    note = "Item not found in the aisle map. Recommend checking the SOP department directory or asking a manager."
+                }, OutputJsonOptions),
+                []);
+        }
+
+        if (candidates.Count == 1)
+        {
+            var only = candidates[0].Value;
+            return new ToolExecutionResult(
+                JsonSerializer.Serialize(new
+                {
+                    item = args.ItemName,
+                    found = true,
+                    matched_key = candidates[0].Key,
+                    department = only.Department,
+                    aisle = only.Aisle,
+                    notes = only.Notes
+                }, OutputJsonOptions),
+                []);
+        }
+
         return new ToolExecutionResult(
             JsonSerializer.Serialize(new
             {
                 item = args.ItemName,
                 found = true,
-                department = location.Department,
-                aisle = location.Aisle,
-                notes = location.Notes
+                disambiguation_required = true,
+                note = "Multiple catalog entries matched. Ask the user which one they meant " +
+                       "before answering.",
+                candidates = candidates.Select(c => new
+                {
+                    matched_key = c.Key,
+                    department = c.Value.Department,
+                    aisle = c.Value.Aisle,
+                    notes = c.Value.Notes
+                })
             }, OutputJsonOptions),
             []);
     }
