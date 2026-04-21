@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Bot, User } from 'lucide-react'
 import type { ChatMessage } from '@/types/chat'
 import { cn } from '@/lib/cn'
+import { MessageBody } from '@/components/MessageBody'
 
 interface ChatTranscriptProps {
   messages: ChatMessage[]
@@ -13,29 +14,40 @@ function formatTimestamp(timestamp: string) {
 }
 
 export function ChatTranscript({ messages, isStreaming }: ChatTranscriptProps) {
-  const endOfMessagesRef = useRef<HTMLDivElement | null>(null)
+  const scrollRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
-    endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    // Scroll the transcript's own container, NOT the element into view — the latter
+    // escapes the flex-1 overflow container and scrolls the whole page under
+    // viewport-contained layouts (lg:h-screen + overflow-hidden on <main>).
+    const el = scrollRef.current
+    if (el) {
+      el.scrollTop = el.scrollHeight
+    }
   }, [messages, isStreaming])
+
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
 
   return (
     <section
+      ref={scrollRef}
       className="flex-1 overflow-y-auto px-5 py-6 space-y-4 scroll-smooth"
       aria-label="Chat transcript"
-      aria-live="polite"
     >
       {messages.map((message) => {
         const isAssistant = message.role === 'assistant'
+        const isNewestAssistant = isAssistant && message.id === lastAssistant?.id
         return (
           <article
             key={message.id}
+            aria-label={`${isAssistant ? 'Assistant' : 'You'} at ${formatTimestamp(message.timestamp)}`}
             className={cn(
               'flex gap-3 max-w-[min(44rem,95%)]',
               isAssistant ? 'self-start mr-auto' : 'self-end ml-auto flex-row-reverse'
             )}
           >
             <div
+              aria-hidden="true"
               className={cn(
                 'flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center border border-border',
                 isAssistant ? 'bg-assistant' : 'bg-user'
@@ -55,12 +67,18 @@ export function ChatTranscript({ messages, isStreaming }: ChatTranscriptProps) {
                 <span>{formatTimestamp(message.timestamp)}</span>
               </div>
               <div
+                // Only the newest assistant message is a live region. This prevents
+                // screen readers from re-announcing the entire history whenever the
+                // user sends a new message (prior aria-live="polite" on the scroll
+                // container did exactly that).
+                aria-live={isNewestAssistant ? 'polite' : undefined}
+                aria-atomic={isNewestAssistant ? 'true' : undefined}
                 className={cn(
-                  'rounded-xl border border-border px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed',
+                  'rounded-xl border border-border px-4 py-3',
                   isAssistant ? 'bg-assistant/70' : 'bg-user/70'
                 )}
               >
-                {message.content}
+                <MessageBody content={message.content} asMarkdown={isAssistant} />
               </div>
             </div>
           </article>
@@ -68,18 +86,27 @@ export function ChatTranscript({ messages, isStreaming }: ChatTranscriptProps) {
       })}
 
       {isStreaming && (
-        <article className="flex gap-3 max-w-[min(44rem,95%)] self-start mr-auto">
-          <div className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center border border-border bg-assistant">
+        <article
+          className="flex gap-3 max-w-[min(44rem,95%)] self-start mr-auto"
+          role="status"
+          aria-label="Assistant is thinking"
+        >
+          <div
+            aria-hidden="true"
+            className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center border border-border bg-assistant"
+          >
             <Bot className="h-4 w-4 text-primary" />
           </div>
-          <div className="rounded-xl border border-border bg-assistant/70 px-4 py-3 text-sm inline-flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse [animation-delay:150ms]" />
-            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse [animation-delay:300ms]" />
+          <div
+            aria-hidden="true"
+            className="rounded-xl border border-border bg-assistant/70 px-4 py-3 text-sm inline-flex items-center gap-1.5 motion-safe:[&>span]:animate-pulse"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+            <span className="h-1.5 w-1.5 rounded-full bg-primary [animation-delay:150ms]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-primary [animation-delay:300ms]" />
           </div>
         </article>
       )}
-      <div ref={endOfMessagesRef} />
     </section>
   )
 }

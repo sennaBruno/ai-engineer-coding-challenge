@@ -3,7 +3,9 @@
 @theme {
   --color-background: oklch(99% 0.003 95);
   --color-foreground: oklch(18% 0.02 260);
-  --color-muted: oklch(58% 0.01 260);
+  /* Darker than the previous 58% so secondary text passes WCAG AA (4.5:1) against
+     the background. Matters for timestamps, ⌘↵ hint, citation snippets, tool args. */
+  --color-muted: oklch(48% 0.01 260);
   --color-border: oklch(90% 0.005 260);
   --color-card: oklch(100% 0 0);
   --color-accent: oklch(96% 0.015 155);
@@ -46,4 +48,13 @@ body {
 
 button {
   font: inherit;
+}
+
+/* Global keyboard focus ring. Tailwind v4 resets browser default outlines,
+   so without this, keyboard users have no visible focus indicator on
+   starter buttons, links, and icon-only triggers. */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
 }

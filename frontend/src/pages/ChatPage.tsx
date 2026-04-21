@@ -111,11 +111,17 @@ export function ChatPage() {
   async function handleSend(override?: string) {
     const candidate = (override ?? draft).trim()
     if (!candidate) return
+    if (isSending) return
 
     const userMessage = createMessage('user', candidate)
-    const nextMessages = [...messages, userMessage]
-
-    setMessages(nextMessages)
+    // Snapshot outside the setter so the fetch payload is from the same
+    // point-in-time as what we render. Functional updater guards against
+    // the rare case where two sends race before a re-render.
+    let snapshot: ChatMessage[] = []
+    setMessages((current) => {
+      snapshot = [...current, userMessage]
+      return snapshot
+    })
     setDraft('')
     setIsSending(true)
     setStatus({ tone: 'info', message: 'Thinking…' })
@@ -124,7 +130,7 @@ export function ChatPage() {
       const response = await apiClient.chat({
         conversationId,
         useTools: true,
-        messages: nextMessages.map((message) => ({
+        messages: snapshot.map((message) => ({
           role: message.role,
           content: message.content,
           timestampUtc: message.timestamp,
@@ -158,8 +164,8 @@ export function ChatPage() {
   const showStarters = messages.length <= 1 && !isSending
 
   return (
-    <main className="min-h-screen grid gap-4 p-4 lg:p-6 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] max-w-[1400px] mx-auto">
-      <section className="flex flex-col rounded-2xl border border-border bg-card/80 backdrop-blur-sm shadow-[0_30px_80px_-30px_oklch(30%_0.02_260_/_0.18)] overflow-hidden min-h-[85vh]">
+    <main className="min-h-screen lg:h-screen grid gap-4 p-4 lg:p-6 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] max-w-[1400px] mx-auto lg:overflow-hidden">
+      <section className="flex flex-col rounded-2xl border border-border bg-card/80 backdrop-blur-sm shadow-[0_30px_80px_-30px_oklch(30%_0.02_260_/_0.18)] overflow-hidden min-h-[75vh] lg:min-h-0">
         <header className="px-6 pt-6 pb-4 border-b border-border bg-gradient-to-br from-accent/40 to-surface">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
@@ -179,7 +185,11 @@ export function ChatPage() {
         <ChatTranscript messages={messages} isStreaming={isSending} />
 
         {showStarters && (
-          <div className="px-5 pb-3 flex flex-wrap gap-2">
+          <div
+            role="group"
+            aria-label="Suggested questions"
+            className="px-5 pb-3 flex flex-wrap gap-2"
+          >
             {STARTER_QUESTIONS.map((question) => (
               <button
                 key={question}
@@ -202,7 +212,7 @@ export function ChatPage() {
         />
       </section>
 
-      <aside className="flex flex-col gap-4">
+      <aside className="flex flex-col gap-4 lg:overflow-y-auto lg:pr-1 lg:min-h-0">
         <IngestPanel
           sourcePath={sourcePath}
           onSourcePathChange={setSourcePath}

@@ -41,12 +41,16 @@ export function ToolCallsPanel({ toolCalls }: ToolCallsPanelProps) {
             return (
               <li
                 key={`${name}-${index}`}
-                className="flex items-start gap-2 rounded-lg border border-border bg-surface/60 px-3 py-2"
+                className="rounded-lg border border-border bg-surface/60 px-3 py-2 space-y-1.5 min-w-0"
               >
                 <Badge tone="success" className="font-mono">
                   {name}
                 </Badge>
-                {args && <span className="text-xs text-muted font-mono leading-relaxed">{args}</span>}
+                {args && (
+                  <pre className="text-[11px] text-muted font-mono leading-snug whitespace-pre-wrap break-all m-0">
+                    {args}
+                  </pre>
+                )}
               </li>
             )
           })}
