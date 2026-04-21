@@ -26,7 +26,16 @@ export function ChatTranscript({ messages, isStreaming }: ChatTranscriptProps) {
     }
   }, [messages, isStreaming])
 
-  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+  // Reverse-scan the array in place instead of [...messages].reverse().find —
+  // one pass, zero allocations. Matters less for correctness than for reading
+  // the intent directly.
+  let lastAssistant: ChatMessage | undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') {
+      lastAssistant = messages[i]
+      break
+    }
+  }
 
   return (
     <section

@@ -268,14 +268,24 @@ public sealed class OpenAIRetrievalChatService(
     {
         var options = new ChatCompletionOptions
         {
+            // Low but > 0: keeps numbers/temperatures/dollar amounts deterministic
+            // when quoting from the SOP, while allowing enough phrasing variation
+            // that canned refusals don't sound like a stock template.
             Temperature = 0.2f,
             MaxOutputTokenCount = MaxOutputTokens
+            // Seed is available on this SDK but marked experimental (OPENAI001);
+            // skipping until it leaves preview to avoid a suppression pragma.
         };
 
         if (!useTools)
         {
             return options;
         }
+
+        // Explicit tool-choice policy. `Auto` is the default for this SDK, but
+        // declaring it signals intent and protects against a future SDK version
+        // flipping the default.
+        options.ToolChoice = ChatToolChoice.CreateAutoChoice();
 
         foreach (var tool in toolRegistry.GetAvailableTools())
         {

@@ -68,8 +68,18 @@ public sealed class SopToolExecutor(
                 []);
         }
 
+        // Trim + cap the query. A confused completion could emit a 2 KB query; the
+        // embedding API accepts it but we pay for every token. 400 chars ≈ 100 tokens
+        // is plenty for legitimate employee questions.
+        const int MaxQueryChars = 400;
+        var query = args.Query.Trim();
+        if (query.Length > MaxQueryChars)
+        {
+            query = query[..MaxQueryChars];
+        }
+
         var topK = Math.Clamp(args.TopK ?? 4, 1, 8);
-        var queryEmbedding = await embeddingService.EmbedAsync(args.Query, ct);
+        var queryEmbedding = await embeddingService.EmbedAsync(query, ct);
         var matches = await vectorStore.SearchAsync(queryEmbedding, topK, ct);
 
         // Similarity floor. text-embedding-3-small cosine for legitimate hits on
@@ -79,6 +89,17 @@ public sealed class SopToolExecutor(
         // derived from the multi-turn test ("unlock doors time" → 0.30ish).
         const double MinRelevanceScore = 0.25;
         var strongMatches = matches.Where(m => m.Score >= MinRelevanceScore).ToList();
+
+        // One-line retrieval quality signal. Cheap for operators scanning logs —
+        // lets them tell "retrieval was healthy, model was confused" from
+        // "retrieval starved the model" without hooking up a trace pipeline.
+        if (matches.Count > 0)
+        {
+            logger.LogInformation(
+                "search_sop query={Query} n={N} kept={Kept} topScore={Top:F3} minScore={Min:F3}",
+                query, matches.Count, strongMatches.Count,
+                matches[0].Score, matches[^1].Score);
+        }
 
         if (strongMatches.Count == 0)
         {
@@ -101,7 +122,7 @@ public sealed class SopToolExecutor(
         // — this is our prompt-injection guard for retrieved SOP text.
         var payload = new
         {
-            query = args.Query,
+            query,
             results = matches.Select(match =>
             {
                 var section = match.Record.Metadata.GetValueOrDefault("section", match.Record.Source);

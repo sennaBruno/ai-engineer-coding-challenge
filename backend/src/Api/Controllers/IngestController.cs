@@ -173,7 +173,12 @@ public sealed class IngestController(
 
         var normalized = path.Replace('\\', Path.DirectorySeparatorChar);
 
-        // Build candidate absolute paths from the relative input.
+        // Build candidate absolute paths from the input. For a relative input we
+        // only consider it as a filename under knowledge-base/. Resolving
+        // arbitrary relatives against ContentRootPath was defense-in-depth-safe
+        // (the containment check still applied) but added an attack surface that
+        // the containment check had to clean up. Dropping it keeps the first
+        // resolved path inside the allowed root by construction.
         var candidates = new List<string>();
         if (Path.IsPathRooted(normalized))
         {
@@ -181,7 +186,6 @@ public sealed class IngestController(
         }
         else
         {
-            candidates.Add(Path.GetFullPath(Path.Combine(environment.ContentRootPath, normalized)));
             candidates.Add(Path.GetFullPath(Path.Combine(knowledgeBaseRoot, Path.GetFileName(normalized))));
         }
 
