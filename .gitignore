@@ -1,75 +1,63 @@
-# =========================
+
+!**/[Pp]ackages/build/
 # .NET
 # =========================
-bin/
-obj/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-*.userprefs
-[Dd]ebug/
-[Rr]elease/
-x64/
-x86/
-bld/
-[Ll]og/
-[Ll]ogs/
-
+# Environment / secrets
+# Generated vector store artifact
+# Local dev secrets — the key lives here only for convenience; env var is preferred.
+# Node / React
 # NuGet
-*.nupkg
+# OS & Editor
+# Rider
+# VS Code
+# Visual Studio
 **/[Pp]ackages/*
-!**/[Pp]ackages/build/
+*.cache
+*.ilk
+*.local
+*.ncb
 *.nuget.props
 *.nuget.targets
-project.lock.json
-project.fragment.lock.json
-
-# Visual Studio
-.vs/
-*.rsuser
-*.cache
-*.ncb
+*.nupkg
 *.opendb
 *.opensdf
 *.pdb
-*.ilk
-
-# Rider
+*.rsuser
+*.sln.docstates
+*.suo
+*.swo
+*.swp
+*.user
+*.userosscache
+*.userprefs
+*~
+.DS_Store
+.env
+.env.*.local
+.env.local
+.gstack/
 .idea/
-
-# =========================
-# Node / React
-# =========================
-node_modules/
-dist/
+.local/
+.vs/
+.vscode/
+Thumbs.db
+[Dd]ebug/
+[Ll]og/
+[Ll]ogs/
+[Rr]elease/
+backend/src/Api/Data/vector-store.json
+backend/src/Api/appsettings.Development.json
+bin/
+bld/
 dist-ssr/
-*.local
+dist/
+node_modules/
 npm-debug.log*
+obj/
+pnpm-debug.log*
+project.fragment.lock.json
+project.lock.json
+x64/
+x86/
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-
-# =========================
-# OS & Editor
-# =========================
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
-
-# VS Code
-.vscode/
-
-# Environment / secrets
-.env
-.env.local
-.env.*.local
-.gstack/
-
-# Generated vector store artifact
-backend/src/Api/Data/vector-store.json
-
-# Local dev secrets — the key lives here only for convenience; env var is preferred.
-backend/src/Api/appsettings.Development.json

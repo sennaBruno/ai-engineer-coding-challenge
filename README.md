@@ -34,44 +34,63 @@ Employees ask questions in a chat UI. The assistant:
 ### Prerequisites
 
 - .NET 10 SDK (10.0.202 tested) — https://dotnet.microsoft.com/download/dotnet/10.0
-- Node.js 20+ and npm
+- Node.js 20+ and one of `bun` / `pnpm` / `npm`
 - An OpenAI API key
 
-### 1. Backend
+### Seamless one-command launch
+
+```bash
+# Put your key in one of these — whichever you prefer:
+export OPENAI_API_KEY=sk-...
+# or: echo 'sk-...' > .local/openai-key   # gitignored
+
+./scripts/dev.sh
+```
+
+`scripts/dev.sh` handles all of the friction:
+
+- Locates `dotnet` on `PATH` or at `~/.dotnet/dotnet`.
+- Resolves the OpenAI key from `$OPENAI_API_KEY` or `.local/openai-key`.
+- Starts the .NET 10 API on `http://localhost:5181`.
+- Starts Vite on the first free port in 5173–5176 (CORS allowlist covers
+  the range).
+- Logs to `scripts/logs/{backend,frontend}.log`.
+- Prints both URLs when everything is up.
+
+Other commands: `./scripts/dev.sh stop` · `./scripts/dev.sh logs`.
+
+### Manual launch (if you prefer)
+
+**Backend** (`http://localhost:5181`):
 
 ```bash
 cd backend/src/Api
-
-# Set the API key — env var is preferred; appsettings is fine for local dev.
 export OPENAI_API_KEY="sk-..."
-
 dotnet run --urls http://localhost:5181
 ```
 
-The API listens on `http://localhost:5181`. Three endpoints:
+Endpoints:
 
 - `GET  /api/health` — liveness
-- `POST /api/ingest` — reads the SOP, chunks, embeds, persists to
-  `backend/src/Api/Data/vector-store.json`
-- `POST /api/chat` — multi-turn chat with tool calling
+- `POST /api/ingest` — chunks + embeds the SOP, persists
+  `backend/src/Api/Data/vector-store.json`. Rate-limited: 5 req/min per IP.
+- `POST /api/chat` — multi-turn chat with tool-calling. Rate-limited:
+  20 req/min per IP.
 
-### 2. Frontend
+**Frontend** (`http://localhost:5173` by default, bumps to 5174 if busy):
 
 ```bash
 cd frontend
-npm install
-npm run dev
+bun install    # or: pnpm install / npm install
+bun run dev
 ```
 
-Opens on `http://localhost:5173` (or 5174 if 5173 is busy). If Vite picks a
-different port, add it to `Cors:AllowedOrigins` in
-`backend/src/Api/appsettings.json`.
+### Using it
 
-### 3. Use it
-
-1. Open the frontend in a browser.
-2. Click **Run ingest** in the right-hand panel. This chunks the SOP into ~25
-   sections and embeds them (~3 seconds).
+1. Open the frontend URL in a browser.
+2. Click **Run ingest** in the right-hand panel. This chunks the SOP into
+   25 sections and embeds them (~3 seconds). To re-embed after editing the
+   SOP or changing the embedding model, tick **Force re-ingest** first.
 3. Ask the assistant questions. Try the starter suggestions below the
    transcript:
    - "What are the opening checklist steps for the manager on duty?"
