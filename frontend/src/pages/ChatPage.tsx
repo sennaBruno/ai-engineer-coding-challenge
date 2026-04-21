@@ -114,14 +114,13 @@ export function ChatPage() {
     if (isSending) return
 
     const userMessage = createMessage('user', candidate)
-    // Snapshot outside the setter so the fetch payload is from the same
-    // point-in-time as what we render. Functional updater guards against
-    // the rare case where two sends race before a re-render.
-    let snapshot: ChatMessage[] = []
-    setMessages((current) => {
-      snapshot = [...current, userMessage]
-      return snapshot
-    })
+    // Build the snapshot synchronously from the closure value. React does NOT
+    // run setState updaters synchronously in event handlers, so reading from
+    // inside the updater into a local would leave the outer variable empty by
+    // the time we call fetch. Double-submit is guarded by the `isSending` check
+    // at the top of this function, so a plain spread is safe here.
+    const snapshot = [...messages, userMessage]
+    setMessages(snapshot)
     setDraft('')
     setIsSending(true)
     setStatus({ tone: 'info', message: 'Thinking…' })

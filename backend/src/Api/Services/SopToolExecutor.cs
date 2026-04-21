@@ -72,12 +72,12 @@ public sealed class SopToolExecutor(
         var queryEmbedding = await embeddingService.EmbedAsync(args.Query, ct);
         var matches = await vectorStore.SearchAsync(queryEmbedding, topK, ct);
 
-        // Similarity floor. text-embedding-3-small cosine scores below ~0.35 are
-        // typically unrelated noise; feeding them to the model as "grounding" is
-        // how RAG systems start hallucinating confidently. Drop below-floor matches
-        // so the model is forced into the "no relevant passage" branch instead of
-        // stitching together weakly-related chunks.
-        const double MinRelevanceScore = 0.35;
+        // Similarity floor. text-embedding-3-small cosine for legitimate hits on
+        // short employee-style queries often lands in the 0.28–0.40 range, so
+        // 0.25 catches genuinely irrelevant noise (random topics, gibberish)
+        // without starving the model on terse legitimate questions. Empirically
+        // derived from the multi-turn test ("unlock doors time" → 0.30ish).
+        const double MinRelevanceScore = 0.25;
         var strongMatches = matches.Where(m => m.Score >= MinRelevanceScore).ToList();
 
         if (strongMatches.Count == 0)
@@ -131,7 +131,15 @@ public sealed class SopToolExecutor(
         // Keep the section attribute quoted and HTML-escape quotes so a crafted section
         // name can't break out of the attribute.
         var safeSection = section.Replace("\"", "&quot;");
-        return $"<sop_chunk section=\"{safeSection}\" {lineAttr}>\n{body}\n</sop_chunk>";
+        // Sanitize the body so an ingested passage containing "</sop_chunk>" or
+        // "<sop_chunk>" cannot close the delimiter and escape the untrusted-data
+        // region the system prompt relies on. We neutralize the `<` of any
+        // would-be delimiter — keeping it readable to the model while preventing
+        // tag-matching parsers (or a helpful model) from treating it as markup.
+        var safeBody = body
+            .Replace("</sop_chunk>", "&lt;/sop_chunk&gt;", StringComparison.OrdinalIgnoreCase)
+            .Replace("<sop_chunk", "&lt;sop_chunk", StringComparison.OrdinalIgnoreCase);
+        return $"<sop_chunk section=\"{safeSection}\" {lineAttr}>\n{safeBody}\n</sop_chunk>";
     }
 
     private static ToolExecutionResult ExecuteLookup(string argumentsJson)

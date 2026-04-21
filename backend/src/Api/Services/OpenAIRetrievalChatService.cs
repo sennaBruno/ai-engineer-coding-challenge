@@ -145,10 +145,31 @@ public sealed class OpenAIRetrievalChatService(
                     var argsJson = toolCall.FunctionArguments.ToString();
                     allToolCalls.Add($"{toolCall.FunctionName}({argsJson})");
 
-                    var execution = await toolExecutor.ExecuteAsync(
-                        toolCall.FunctionName,
-                        argsJson,
-                        cancellationToken);
+                    ToolExecutionResult execution;
+                    try
+                    {
+                        execution = await toolExecutor.ExecuteAsync(
+                            toolCall.FunctionName,
+                            argsJson,
+                            cancellationToken);
+                    }
+                    catch (Exception toolEx)
+                    {
+                        // Tool failures (embedding API down, vector store read error)
+                        // must not kill the whole chat turn — we feed a synthetic error
+                        // payload back to the model so it can either recover via a
+                        // different tool or apologize gracefully. The global 500 handler
+                        // would otherwise return a JSON shape the frontend doesn't expect.
+                        logger.LogError(toolEx,
+                            "Tool {Tool} threw on iter {Iter}; feeding synthetic error to model",
+                            toolCall.FunctionName, iteration);
+                        var errorPayload = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            error = "Tool execution failed. Apologize to the user and suggest " +
+                                    "they retry or contact their supervisor."
+                        });
+                        execution = new ToolExecutionResult(errorPayload, []);
+                    }
 
                     foreach (var chunk in execution.RetrievedChunks)
                     {
